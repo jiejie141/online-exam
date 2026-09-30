@@ -1,0 +1,41 @@
+# 本地依赖：MySQL / Redis / RabbitMQ
+#
+# 启动：  docker compose up -d
+# 停止：  docker compose down
+# 彻底清数据：docker compose down -v
+#
+# 如果拉取镜像超时（registry-1.docker.io 被墙），把 image 前面加上镜像源前缀：
+#   docker.m.daocloud.io/library/mysql:8.0
+#   docker.m.daocloud.io/library/redis:7.4-alpine
+#   docker.m.daocloud.io/library/rabbitmq:3.13-management-alpine
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: exam-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      TZ: Asia/Shanghai
+    command: --default-time-zone=+08:00
+    volumes:
+      - exam-mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: exam-redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: exam-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # 管理台 guest/guest
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+volumes:
+  exam-mysql-data:

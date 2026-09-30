@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""端到端接口校验 + 判分延迟实测。
+
+用法： python scripts/e2e_check.py --base http://127.0.0.1:8099
+
+做两件事：
+  1. 校验 —— 用一个"答案已知"的答卷跑完整流程，断言总分必须等于手算出来的 87 分。
+             这不是"接口返回 200 就算过"，而是判分结果必须和数字对得上。
+  2. 实测 —— 批量造 N 个学生各交一份卷，记录"交卷 -> 出分"的延迟分布。
+             这个数字是简历上唯一能写、也唯一必须在现场能复现的那种数字。
+"""
+import argparse
+import json
+import statistics
+import sys
+import time
+import urllib.error
+import urllib.request
+
+FAILS = []
+PASSES = 0
+
+
+def check(name, ok, detail=""):
+    global PASSES
+    if ok:
+        PASSES += 1
+        print(f"  PASS  {name}" + (f"  ({detail})" if detail else ""))
+    else:
+        FAILS.append(name)
+        print(f"  FAIL  {name}  {detail}")
+
+
+class Api:
+    def __init__(self, base):
+        self.base = base.rstrip("/")
+
+    def call(self, method, path, token=None, body=None):
+        req = urllib.request.Request(self.base + path, method=method)
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        data = json.dumps(body).encode() if body is not None else None
+        try:
+            with urllib.request.urlopen(req, data, timeout=30) as resp:
+                return resp.status, json.loads(resp.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            try:
+                return e.code, json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                return e.code, {"raw": raw}
+
+    def raw(self, path, token=None):
+        """拿原始响应文本，用于检查响应里有没有漏出不该出现的字段"""
+        req = urllib.request.Request(self.base + path)
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read().decode()
+
+
+def login(api, username, password):
+    st, body = api.call("POST", "/api/auth/login",
+                        body={"username": username, "password": password})
+    if st != 200:
+        raise RuntimeError(f"login failed {username}: {st} {body}")
+    return body["data"]["token"]
+
+
+def submit_and_wait(api, token, record_id, timeout_sec=30):
+    t0 = time.time()
+    st, body = api.call("POST", f"/api/records/{record_id}/submit", token=token)
+    if st != 200:
+        return None, None, f"submit http {st}: {body}"
+    submit_ms = int((time.time() - t0) * 1000)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        st2, body2 = api.call("GET", f"/api/records/{record_id}/result", token=token)
+        if st2 == 200:
+            return body2["data"]["score"], int((time.time() - t0) * 1000), None
+        # 轮询间隔直接决定测出来的延迟精度。之前用 50ms，测出来的数被量化成
+        # 50/100/150ms 三档，p99 完全失真；降到 10ms 才看得出真实分布。
+        time.sleep(0.01)
+    return None, None, "grading timeout"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default="http://127.0.0.1:8099")
+    ap.add_argument("--students", type=int, default=50, help="批量造多少学生跑延迟实测")
+    args = ap.parse_args()
+
+    api = Api(args.base)
+
+    print("\n[1] 登录")
+    tt = login(api, "t001", "teacher123")
+    check("老师 t001 登录", True)
+    st, body = api.call("POST", "/api/auth/login",
+                        body={"username": "s001", "password": "wrong-password"})
+    # HTTP 状态和 body.code 必须一致：只判断 HTTP 状态的调用方也要能认出这是鉴权失败
+    check("错误口令返回 401（HTTP 状态与 body code 一致）",
+          st == 401 and body.get("code") == 401, f"http={st} code={body.get('code')}")
+    ss = login(api, "s001", "student123")
+    check("学生 s001 登录", True)
+
+    print("\n[2] 可参加的考试")
+    st, body = api.call("GET", "/api/exams/available", token=ss)
+    exams = body.get("data") or []
+    check("能看到已发布的考试", len(exams) >= 1, f"{len(exams)} 场")
+    exam_id = exams[0]["id"] if exams else 1
+
+    print("\n[3] 进入考试")
+    st, body = api.call("POST", f"/api/exams/{exam_id}/start", token=ss)
+    check("进入考试", st == 200 and body.get("code") == 0, str(body.get("message", "")))
+    record_id = body["data"]["recordId"]
+    st, body2 = api.call("POST", f"/api/exams/{exam_id}/start", token=ss)
+    check("重复进入返回同一份答卷（不重开）",
+          body2["data"]["recordId"] == record_id,
+          f"{record_id} vs {body2['data']['recordId']}")
+
+    print("\n[4] 卷面不能泄露答案")
+    raw = api.raw(f"/api/exams/{exam_id}/paper", token=ss)
+    check("卷面 JSON 里没有 answer 字段", '"answer"' not in raw)
+    st, body = api.call("GET", f"/api/exams/{exam_id}/paper", token=ss)
+    paper = body["data"]
+    check("卷面 10 道题", len(paper) == 10, f"{len(paper)} 题")
+
+    print("\n[5] 按已知答案作答")
+    # 卷面按 seq 排，对应 seed.sql 里的 10 道题
+    # Q1-Q6 单选各 10 分全对 = 60
+    # Q7 多选 ABCD 全对 = 15
+    # Q8 多选答案 ABC，故意只答 AB -> 漏选半分 = 7
+    # Q9 判断答案 T，答 T = 5
+    # Q10 判断答案 F，故意答 T = 0
+    # 手算总分 = 60 + 15 + 7 + 5 + 0 = 87
+    answers = ["B", "C", "B", "B", "C", "C", "ABCD", "AB", "T", "T"]
+    expected = 87
+    for item, ans in zip(paper, answers):
+        st, _ = api.call("POST", f"/api/records/{record_id}/answers", token=ss,
+                         body={"questionId": item["id"], "answer": ans})
+        if st != 200:
+            check(f"保存第 {item['seq']} 题", False, f"http {st}")
+    check("10 道题作答全部保存成功", True)
+
+    print("\n[6] 交卷与判分（异步 MQ）")
+    score, latency_ms, err = submit_and_wait(api, ss, record_id)
+    check("判分完成", err is None, err or "")
+    check(f"总分等于手算值 {expected}", score == expected, f"实际 {score}")
+    if latency_ms is not None:
+        print(f"      交卷->出分 延迟 {latency_ms} ms")
+
+    print("\n[7] 重复交卷幂等")
+    st, body = api.call("POST", f"/api/records/{record_id}/submit", token=ss)
+    st2, body2 = api.call("GET", f"/api/records/{record_id}/result", token=ss)
+    check("重复交卷后分数不变", body2["data"]["score"] == expected,
+          f"{body2['data']['score']}")
+
+    print("\n[8] 越权访问")
+    s2 = login(api, "s002", "student123")
+    st, body = api.call("GET", f"/api/records/{record_id}/result", token=s2)
+    check("别人查不到我的答卷（403）", body.get("code") == 403, f"code={body.get('code')}")
+
+    print("\n[9] 老师端统计")
+    st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=tt)
+    stats = body["data"]
+    check("已判分人数 >= 1", stats["total"] >= 1, str(stats))
+    st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/distribution", token=tt)
+    check("成绩分布非空", len(body["data"]) >= 1, str(body["data"]))
+    st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/accuracy", token=tt)
+    acc = body["data"]
+    check("逐题正确率返回 10 题", len(acc) == 10, f"{len(acc)}")
+    # 漏选的那道（卷面第 8 题）给了半分但 correct=false，正确率必须是 0。
+    # 用 paper 里实际的 id 而不是写死 8：题号是自增主键，重跑种子数据后不一定从 1 开始。
+    missed_id = paper[7]["id"]
+    missed = [q for q in acc if q["questionId"] == missed_id]
+    check("漏选题的正确率是 0（不算对）",
+          bool(missed) and missed[0]["correctCount"] == 0, str(missed))
+
+    print("\n[10] 权限边界")
+    st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=ss)
+    check("学生访问老师接口被拒（403）", st == 403, f"http {st}")
+
+    # ---------------- 延迟实测 ----------------
+    print(f"\n[11] 判分延迟实测（另造 {args.students} 名学生各交一份卷）")
+    latencies = []
+    submit_latencies = []
+    scores = []
+    ok = 0
+    for i in range(args.students):
+        username = f"bench{i:03d}"
+        st, body = api.call("POST", "/api/teacher/users", token=tt,
+                            body={"username": username, "password": "student123",
+                                  "realName": f"压测{i}", "role": "student"})
+        if st != 200 and body.get("code") != 400:
+            continue
+        tok = login(api, username, "student123")
+        st, body = api.call("POST", f"/api/exams/{exam_id}/start", token=tok)
+        if st != 200:
+            continue
+        rid = body["data"]["recordId"]
+        for item, ans in zip(paper, answers):
+            api.call("POST", f"/api/records/{rid}/answers", token=tok,
+                     body={"questionId": item["id"], "answer": ans})
+        t0 = time.time()
+        st, _ = api.call("POST", f"/api/records/{rid}/submit", token=tok)
+        submit_ms = int((time.time() - t0) * 1000)
+        score, total_ms, err = submit_and_wait(api, tok, rid)
+        if err is None:
+            ok += 1
+            latencies.append(total_ms)
+            submit_latencies.append(submit_ms)
+            scores.append(score)
+
+    if latencies:
+        latencies.sort()
+        submit_latencies.sort()
+        p = lambda arr, q: arr[min(len(arr) - 1, int(len(arr) * q))]
+        print(f"      成功判分 {ok} 份")
+        print(f"      交卷接口耗时   avg {int(statistics.mean(submit_latencies))} ms"
+              f"   p99 {p(submit_latencies, 0.99)} ms")
+        print(f"      交卷->出分延迟  avg {int(statistics.mean(latencies))} ms"
+              f"   p50 {p(latencies, 0.5)} ms   p99 {p(latencies, 0.99)} ms"
+              f"   max {latencies[-1]} ms")
+        check("批量判分全部完成", ok == len(latencies) and ok >= args.students * 0.9,
+              f"{ok}/{args.students}")
+        check("批量判分分数一致（都是 87）", set(scores) == {87}, f"出现过的分数 {set(scores)}")
+    else:
+        check("批量判分", False, "一份都没判成功")
+
+    print("\n" + "=" * 58)
+    print(f"通过 {PASSES} 项，失败 {len(FAILS)} 项")
+    if FAILS:
+        for f in FAILS:
+            print(f"  - {f}")
+    print("=" * 58)
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

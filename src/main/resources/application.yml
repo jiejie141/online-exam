@@ -1,0 +1,71 @@
+spring:
+  application:
+    name: online-exam
+
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:3306/online_exam?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 3000
+
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        concurrency: 2
+        max-concurrency: 4
+        prefetch: 20
+
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8081
+
+mybatis-plus:
+  configuration:
+    # 统计查询的别名一律写 snake_case（avg_score 等），靠它映射回驼峰字段
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+exam:
+  jwt:
+    # 生产环境要从环境变量注入，这里放默认值只是为了本地能直接跑起来
+    secret: "online-exam-dev-secret-please-change-in-production-32b"
+    ttl-minutes: 120
+  grading:
+    # true = 交卷后丢 MQ 异步判分；false = 同步判分（本地没起 RabbitMQ 时用这个）
+    async: true
+  cache:
+    paper-ttl-seconds: 600   # 卷面缓存 10 分钟，实际过期时刻带 ±20% 抖动
+    null-ttl-seconds: 60     # 空卷面（哨兵）缓存 1 分钟就够，防止穿透
+    jitter-ratio: 0.2
+  auto-submit:
+    # 定时任务每 30 秒扫一次超时未交卷的答卷
+    fixed-delay-ms: 30000
+    batch-size: 200
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
