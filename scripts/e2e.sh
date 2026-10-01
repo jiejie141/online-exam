@@ -25,8 +25,8 @@ for i in $(seq 1 40); do
 done
 
 echo "== 3/6 建表 + 灌数据 =="
-docker exec -i exam-mysql mysql -uroot -proot < src/main/resources/db/schema.sql
-docker exec -i exam-mysql mysql -uroot -proot < src/main/resources/db/seed.sql
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/schema.sql
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/seed.sql
 docker exec exam-mysql mysql -uroot -proot -e \
   "SELECT (SELECT COUNT(*) FROM question) AS questions, \
           (SELECT COUNT(*) FROM exam_question) AS paper_items, \

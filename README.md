@@ -44,9 +44,11 @@ docker compose up -d
 ### 2. 建表 + 灌演示数据
 
 ```bash
-docker exec -i exam-mysql mysql -uroot -proot < src/main/resources/db/schema.sql
-docker exec -i exam-mysql mysql -uroot -proot < src/main/resources/db/seed.sql
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/schema.sql
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/seed.sql
 ```
+
+> **灌数据命令必须带 `--default-character-set=utf8mb4`**：mysql 客户端默认用 latin1 连接，UTF-8 中文会被按 latin1 逐字节转存，库里变成双重编码乱码——判分不受影响，但题干全是 `ä¸­` 这种字符。之前灌过的话，把上面两条命令重跑一遍即可。
 
 演示账号（口令在 `seed.sql` 里以 BCrypt 哈希存）：
 
