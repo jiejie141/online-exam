@@ -26,6 +26,16 @@ RUN mvn -B -q clean package -DskipTests
 # ---- 运行阶段 -------------------------------------------------------------
 FROM eclipse-temurin:17-jre
 
+# 显式装 curl。
+#
+# 不依赖「基础镜像里应该自带 curl」：HEALTHCHECK 用的是 curl，
+# 而基础镜像有没有它取决于上游的版本与变体，是这里唯一无法在离线环境
+# 验证的假设。显式装一次只多几 MB，但让 HEALTHCHECK 的正确性不依赖
+# 上游镜像的细节 —— 否则哪天上游把 curl 从基础层去掉，
+# 表现是容器一直 unhealthy，而日志里什么都没有。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 # 显式建一个非 root 用户。默认的 root 容器一旦被拿下就是宿主机的 root，
 # 而应用本身不需要任何特权。
 RUN groupadd -r app && useradd -r -g app app
@@ -49,5 +59,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
 
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
 
-# 备注：运行阶段没装 curl 的话 HEALTHCHECK 会一直失败。
-# eclipse-temurin:17-jre 基于 Ubuntu，自带 curl，所以上面可以直接用。
+# 关于 curl：它由上面那条 apt-get 显式安装，不是"指望基础镜像自带"。
+# 之前这里写着一句"eclipse-temurin 基于 Ubuntu，自带 curl" ——
+# 那是没有验证过的断言（离线环境拉不到镜像），而它恰好是
+# HEALTHCHECK 能否工作的唯一前提。改成显式安装，这个假设就不存在了。
