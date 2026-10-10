@@ -49,9 +49,15 @@ mybatis-plus:
 
 exam:
   jwt:
-    # 生产环境要从环境变量注入，这里放默认值只是为了本地能直接跑起来
-    secret: "online-exam-dev-secret-please-change-in-production-32b"
-    ttl-minutes: 120
+    # 必须由环境变量 EXAM_JWT_SECRET 注入，**故意不给默认值**。
+    #
+    # 原来这里写着一个能直接用的默认密钥（"online-exam-dev-secret-..."），
+    # 那等于把签名密钥连同代码一起提交进了版本库：任何读过这个仓库的人
+    # 都能自己签一个 role=teacher 的令牌，直接改成绩。
+    # 原来的注释写着"生产要改"，但没有任何东西**强制**改 —— 那就迟早不会改。
+    # 现在留空 + JwtUtil 启动即校验，不设就起不来（fail-closed）。
+    secret: "${EXAM_JWT_SECRET:}"
+    ttl-minutes: ${EXAM_JWT_TTL_MINUTES:120}
   grading:
     # true = 交卷后丢 MQ 异步判分；false = 同步判分（本地没起 RabbitMQ 时用这个）
     async: true

@@ -62,9 +62,17 @@ docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < 
 
 ### 3. 起服务
 
+**先设 JWT 签名密钥**（应用不再内置默认密钥，不设会直接拒绝启动）：
+
 ```bash
+export EXAM_JWT_SECRET=$(openssl rand -hex 32)   # Windows: set EXAM_JWT_SECRET=<32 字节以上的随机串>
 mvn spring-boot:run
 ```
+
+> 为什么是"拒绝启动"而不是"记一条警告继续跑"：一个用默认密钥跑起来的考试系统，
+> 从外面看和正常的**一模一样** —— 登录能登、判分能判、健康检查是 UP。
+> 它唯一的区别是任何人都能自己签一个 `role=teacher` 的令牌改成绩。
+> 这种失败不会自己暴露，所以只能靠"起不来"来暴露它。
 
 端口 `8081`。没有 Redis 也能跑（缓存会降级成直接查库），没有 RabbitMQ 也能跑（判分会降级成同步）。
 

@@ -35,6 +35,10 @@ docker exec exam-mysql mysql -uroot -proot -e \
 
 echo "== 4/6 起服务（端口 ${PORT}）=="
 mkdir -p target
+# JWT 密钥：应用不再内置默认值，不设就起不来（见 JwtUtil 的启动校验）。
+# 这里用固定值而不是随机值，是为了让"失败重跑"的结果可比较；
+# 它只在本地 8099 端口上活几分钟，不承担任何真实安全性。
+export EXAM_JWT_SECRET="${EXAM_JWT_SECRET:-e2e-only-local-secret-not-for-production-0123456789abcdef}"
 # 显式指定端口：某些环境会注入 SERVER__PORT 把 server.port 顶掉
 mvn -B -q spring-boot:run -Dspring-boot.run.arguments="--server.port=${PORT}" > "$LOG" 2>&1 &
 APP_PID=$!

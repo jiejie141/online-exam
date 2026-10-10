@@ -21,12 +21,36 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
+    /** HS384 的密钥长度底线。短于此长度的密钥可被暴力枚举，签名就形同虚设。 */
+    private static final int MIN_SECRET_BYTES = 32;
+
     private final SecretKey key;
     private final long ttlMinutes;
 
     public JwtUtil(@Value("${exam.jwt.secret}") String secret,
                    @Value("${exam.jwt.ttl-minutes}") long ttlMinutes) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        // 启动即校验，不满足就拒绝启动（fail-closed）。
+        //
+        // 为什么在这里抛，而不是"记一条 WARN 继续跑"：
+        // 一个用默认/空密钥跑起来的考试系统，从外面看和正常的一模一样 ——
+        // 登录能登、判分能判、健康检查是 UP。它唯一的区别是
+        // **任何人都能伪造老师的令牌**。这种失败不会自己暴露，
+        // 所以只能靠"起不来"来暴露它。代价是首次部署多一步配环境变量，
+        // 收益是这一步没法被跳过。
+        String value = secret == null ? "" : secret.trim();
+        if (value.isEmpty()) {
+            throw new IllegalStateException(
+                    "未配置 JWT 签名密钥：请设置环境变量 EXAM_JWT_SECRET（至少 "
+                            + MIN_SECRET_BYTES + " 字节随机值）。生成方式：openssl rand -hex 32");
+        }
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "EXAM_JWT_SECRET 太短（" + bytes.length + " 字节，至少需要 " + MIN_SECRET_BYTES
+                            + " 字节）：短密钥可以被暴力枚举，等同于没有签名。"
+                            + "生成方式：openssl rand -hex 32");
+        }
+        this.key = Keys.hmacShaKeyFor(bytes);
         this.ttlMinutes = ttlMinutes;
     }
 
