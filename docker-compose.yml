@@ -81,7 +81,14 @@ services:
       # 密钥必须从外部注入。用 ${EXAM_JWT_SECRET:?...} 而不是 ${EXAM_JWT_SECRET:-默认值}：
       # 前者没设时直接报错并告诉你该设什么；后者会拿一个假密钥悄悄跑起来 ——
       # 而「悄悄跑起来」正是这个项目要避免的失败形态（见 JwtUtil）。
-      EXAM_JWT_SECRET: "${EXAM_JWT_SECRET:?请先设置 EXAM_JWT_SECRET，例如 export EXAM_JWT_SECRET=$(openssl rand -hex 32)}"
+      # 刻意**不用** ${EXAM_JWT_SECRET:?报错} 这种写法：
+      # compose 会校验所有 service 的变量插值，哪怕该 service 属于未启用的 profile。
+      # 于是 docker compose up -d mysql（e2e.sh 正是这么用的）会因为
+      # 一个根本没被启动的 app service 而整体失败 —— 这是我实际踩到的。
+      # 改成直接引用：没设时它展开成空串，应用自己的 fail-closed 校验
+      # （JwtUtil）会在启动时拒绝，并给出更准确的报错。契约没丢，
+      # 只是把"报错时机"从 compose 层换到了应用层更合适的位置。
+      EXAM_JWT_SECRET: "${EXAM_JWT_SECRET}"
     depends_on:
       mysql:
         condition: service_healthy

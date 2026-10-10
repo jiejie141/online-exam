@@ -256,7 +256,9 @@ mvn test
 
 1. **SQL 不在 `mvn test` 里验证。** SQL 用了 MySQL 专有语法（JSON 列、
    `INSERT ... AS new ON DUPLICATE KEY UPDATE`），H2 跑出来的"通过"是假的，所以没引入 H2。
-   真实 SQL 靠 `scripts/e2e.sh` 连真 MySQL 跑 —— 但它需要 Docker，不进 CI。
+   真实 SQL 靠 `scripts/e2e.sh` 连真 MySQL 跑；CI 的 e2e job 会跑它
+   （见 .github/workflows/ci.yml），所以现在是**每次 push 都会验**，
+   不再是"只在我机器上验过"。
 2. **判分失败不会自动重试。** 消费者吞掉异常只记日志，靠"score 为 NULL 的已交卷记录数"
    去发现漏判。要做对需要死信队列 + 重试计数，见 `GradingConsumer` 的注释。
 3. **没有防作弊**：无切屏检测、无题目乱序、无选项乱序。
@@ -265,6 +267,14 @@ mvn test
 6. **WebSocket 没做水平扩展**：连接存在单机内存里，多实例部署需要换成广播（Redis Pub/Sub 或 Broker）。
 7. **JWT 无法主动失效**，改密码或踢人需要额外的令牌黑名单。
 8. **没有文件上传/富文本题干**，题干是纯文本。
+9. **Dockerfile 没有在真实镜像上构建过。** 本机 Docker Desktop 配了一个
+   已经不存在的代理（127.0.0.1:7890），任何镜像都拉不下来，所以 `docker build`
+   只做到了"指令结构已校验"这一步。CI 的 docker job 会在能联网的 runner 上真跑一次。
+10. **迁移 V1 是事后基线，不是从一开始就有的。** V1 的内容等于原来的
+    `schema.sql`，所以从零建库、和按旧 schema.sql 建过的库，
+    会走到不同的分支（一个真跑 V1，一个被 baseline 成 1）。两者最终结构一致，
+    但 `flyway_schema_history` 里的记录不同 —— 这是"中途引入迁移工具"
+    必然留下的痕迹，不是 bug。
 
 ## 九、目录
 

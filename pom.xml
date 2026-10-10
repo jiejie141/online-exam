@@ -99,6 +99,22 @@
       <scope>provided</scope>
     </dependency>
 
+    <!-- 版本化迁移。原本只有 schema.sql，它用 CREATE TABLE IF NOT EXISTS，
+         从零建库够用，但**改不了已存在的表**：给某张表加一列时改 CREATE TABLE，
+         对已经建过表的库会被 IF NOT EXISTS 直接跳过，于是「新库有、老库没有」
+         这种偏差会一直存在且不会被发现。Flyway 用版本号 + 校验和把这件事
+         变成启动时的硬检查：已应用的迁移被改动过就直接拒绝启动。 -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <!-- Flyway 10 起把 MySQL 支持拆成了独立模块，不加这个只有 flyway-core
+         会在启动时报 "No database found to handle jdbc:mysql://..." -->
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
