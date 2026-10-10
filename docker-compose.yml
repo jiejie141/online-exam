@@ -4,6 +4,15 @@
 # 停止：  docker compose down
 # 彻底清数据：docker compose down -v
 #
+# ★ 默认只起**依赖**，不起应用本身。
+#
+# 这不是疏忽，是刻意的：scripts/e2e.sh 会执行 docker compose up -d，
+# 然后在宿主机上用 mvn spring-boot:run 起应用。如果这里默认就把应用也拉起来，
+# 8081 端口会撞车，而且 e2e 会变成「在测容器里的那份代码」而不是当前工作区。
+#
+# 想把应用也装进容器里跑，用 app profile：
+#   docker compose --profile app up -d --build
+#
 # 如果拉取镜像超时（registry-1.docker.io 被墙），把 image 前面加上镜像源前缀：
 #   docker.m.daocloud.io/library/mysql:8.0
 #   docker.m.daocloud.io/library/redis:7.4-alpine
@@ -20,12 +29,26 @@ services:
     command: --default-time-zone=+08:00
     volumes:
       - exam-mysql-data:/var/lib/mysql
+    # app 的 depends_on 用 condition: service_healthy 等它 ——
+    # 没有健康检查的话 compose 只能等容器「启动了」，而 MySQL 启动后
+    # 还要若干秒才接受连接，应用会在那几秒里连接失败并退出。
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   redis:
     image: redis:7.4-alpine
     container_name: exam-redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -36,6 +59,42 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # 应用本体。放在 app profile 下，默认不启动（原因见文件头注释）。
+  app:
+    build: .
+    container_name: exam-app
+    profiles: ["app"]
+    ports:
+      - "8081:8081"
+    environment:
+      # 容器里连的是 service 名，不是 127.0.0.1 —— 这点和宿主机直跑不同。
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/online_exam?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_RABBITMQ_HOST: rabbitmq
+      # 密钥必须从外部注入。用 ${EXAM_JWT_SECRET:?...} 而不是 ${EXAM_JWT_SECRET:-默认值}：
+      # 前者没设时直接报错并告诉你该设什么；后者会拿一个假密钥悄悄跑起来 ——
+      # 而「悄悄跑起来」正是这个项目要避免的失败形态（见 JwtUtil）。
+      EXAM_JWT_SECRET: "${EXAM_JWT_SECRET:?请先设置 EXAM_JWT_SECRET，例如 export EXAM_JWT_SECRET=$(openssl rand -hex 32)}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
 volumes:
   exam-mysql-data:

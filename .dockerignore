@@ -1,0 +1,28 @@
+# 构建上下文排除清单。
+#
+# 没有这个文件时 `docker build .` 会把整个目录发给 daemon ——
+# 包括 target/（已经编译好的 class 与 fat jar）和 .git/。
+# 后果有两个：构建变慢，以及 Dockerfile 里的 COPY src 语义仍然正确，
+# 但缓存键会被无关文件的变化反复打穿。
+
+target/
+.git/
+.gitignore
+
+# 本地跑出来的日志与探针输出（e2e.sh / bench.sh 会产生）
+*.log
+paper_probe.json
+diag.pid
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 文档与脚本不进镜像：运行时一行都不需要
+docs/
+*.md
