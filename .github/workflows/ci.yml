@@ -178,9 +178,29 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # 把日志切成几条 annotation 发出来。
+      #
+      # artifact 要登录才能下（已验证 401），而这里需要的只是
+      # 『看一眼就知道哪行错』。日志本身很小（应用是启动即失败，几 KB），
+      # 用 base64 绕开换行和特殊字符，切成每段 800 字符，
+      # 控制在 annotation 上限之内。
       - name: 服务日志（失败时才有用）
         if: failure()
         run: |
+          set +e
+          for f in target/e2e-app.log target/e2e-run.log; do
+            if [ -s "$f" ]; then
+              b64=$(gzip -c "$f" | base64 -w0)
+              echo "::error title=$f (gzip+base64, ${#b64} 字符)::$(echo $b64 | cut -c1-1500)"
+              if [ ${#b64} -gt 1500 ]; then
+                echo "::error title=$f 续::$(echo $b64 | cut -c1501-3000)"
+              fi
+            else
+              echo "::error title=$f::文件为空或不存在"
+            fi
+          done
+          echo '=== 下面是人眼可读的尾部 ==='
+          tail -60 target/e2e-app.log 2>/dev/null || true
           echo '=== 应用日志 ==='; tail -60 target/e2e-app.log 2>/dev/null || true
           echo '=== 容器状态 ==='; docker compose ps || true
           echo '=== e2e.sh 输出 ==='; cat target/e2e-run.log 2>/dev/null || true
