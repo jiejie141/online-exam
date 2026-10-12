@@ -81,9 +81,13 @@ if ! curl -s -f "${BASE}/actuator/health" > /dev/null 2>&1; then
   tail -40 "$LOG"
   # Maven 的报错通常在日志中段（后面还接着它自己的一堆 [ERROR] 套话），
   # 只 tail 尾部经常正好错过第一现场。再把第一个 ERROR 的上下文捞一遍。
-  if grep -q 'BUILD FAILURE\|ERROR' "$LOG" 2>/dev/null; then
+  # grep -a：应用日志里有 ANSI 颜色码等控制字符，grep 会把它当二进制，
+  # 直接报 "Binary file matches" 而**不输出行号** —— 于是 n 是空的，
+  # sed 截不到任何东西，annotation 里就只剩一个标题。
+  # 这个坑让我多花了两轮：明明写好的截取逻辑，看起来像没执行。
+  if grep -aq 'BUILD FAILURE\|ERROR' "$LOG" 2>/dev/null; then
     echo "!! 日志里第一处 ERROR 的上下文："
-    n=$(grep -n 'ERROR' "$LOG" | head -1 | cut -d: -f1)
+    n=$(grep -an 'ERROR' "$LOG" | head -1 | cut -d: -f1)
     from=$((n > 12 ? n - 12 : 1))
     sed -n "${from},$((n + 20))p" "$LOG"
   fi

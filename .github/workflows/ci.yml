@@ -125,6 +125,12 @@ jobs:
       # e2e.sh 自己会 docker compose up -d 并等 MySQL 就绪，
       # 所以这里不重复声明 services —— 保持「本地怎么跑，CI 就怎么跑」。
       - name: 跑端到端（含判分延迟实测）
+        # 显式声明密钥，和 unit job 保持一致。
+        # e2e.sh 内部也有一个默认值兜底，这里再写一遍是为了：
+        # 把『密钥从哪来』放进 workflow 里可见（和 unit job 同样的理由），
+        # 而不是依赖脚本内部的隐式默认。
+        env:
+          EXAM_JWT_SECRET: ci-only-secret-please-do-not-reuse-0123456789abcdef
         run: |
           # 这个 job 失败时，匿名能拿到的只有 annotation（job 日志下载要认证）。
           # 而 annotation 有条数上限（约 10 条），**超出的会被静默丢弃** ——
@@ -152,6 +158,26 @@ jobs:
       # 而且顺序是乱的 —— 看起来像『日志是空的』，实际是『发不出去』。
       #
       # 所以这里改成：把每段信息压成**一行**，总共不超过 5 条。
+      # 把完整日志传成 artifact。
+      #
+      # 前面几轮都在试图把关键信息塞进 annotation，但 annotation 有条数上限
+      # （约 10 条，超出静默丢弃），而且每条还有长度上限会被截断 ——
+      # 我为了看一段堆栈花了四轮。
+      # artifact 没有这些问题：几 MB 的日志原样传上去，
+      # 谁有仓库读权限谁就能下。要登录，但这是一次性的成本，
+      # 而『每轮猜一次』的成本是复利的。
+      - name: 上传日志（失败时才有用）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            target/e2e-run.log
+            target/e2e-app.log
+            target/e2e-check.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: 服务日志（失败时才有用）
         if: failure()
         run: |
