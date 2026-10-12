@@ -33,8 +33,12 @@ public class StatsService {
     public ExamScoreStats stats(Long examId) {
         requireExam(examId);
         ExamScoreStats s = recordMapper.stats(examId);
-        // 没人交卷时 SQL 返回的是一行全 0（MAX/MIN 是 NULL），这里补成"零人"的结构，
-        // 免得前端拿到 avgScore=null 之后还要自己判空
+        // 没人判分时这条 SQL 仍然返回一行（COUNT 是 0，而 AVG/MAX/MIN 是 NULL），
+        // 这里把 total/passCount 补成明确的 0，让前端能直接显示"0 人参加"。
+        //
+        // 注意**不**给 avgScore/maxScore/minScore 填 0：没人交卷时"平均分 0"
+        // 是假数据，会显示成一个真实存在的 0 分。它们保持 null，
+        // 前端应该按 total == 0 判断"还没有成绩"，而不是看 avgScore 是不是 null。
         if (s == null || s.getTotal() == null || s.getTotal() == 0) {
             ExamScoreStats empty = new ExamScoreStats();
             empty.setTotal(0);

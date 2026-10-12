@@ -283,6 +283,49 @@ class ExamSessionServiceTest {
     }
 
     @Test
+    void 已交卷的答卷重新进场要带上状态让前端能跳成绩页() {
+        // 重复进入返回的是原来那份答卷；如果它已经交了卷，
+        // status 必须是 submitted —— 调用方据此跳成绩页而不是渲染答题界面。
+        // 只看"拿到卷子了"就进答题页的话，学生每答一题都会被 saveAnswer 拒掉。
+        Exam exam = new Exam();
+        exam.setId(1L);
+        exam.setStatus(ExamStatus.PUBLISHED.code());
+        exam.setStartAt(NOW.minusHours(1));
+        exam.setEndAt(NOW.plusHours(1));
+        exam.setDurationMinutes(60);
+        when(examMapper.selectById(1L)).thenReturn(exam);
+
+        ExamRecord done = new ExamRecord();
+        done.setId(500L);
+        done.setExamId(1L);
+        done.setUserId(7L);
+        done.setStatus(RecordStatus.SUBMITTED.code());
+        done.setDeadlineAt(NOW.plusMinutes(30));
+        when(recordMapper.findByExamAndUser(1L, 7L)).thenReturn(done);
+
+        ExamSessionService.StartResult result = service.start(1L, 7L);
+
+        assertEquals(500L, result.recordId());
+        assertEquals(RecordStatus.SUBMITTED.code(), result.status());
+    }
+
+    @Test
+    void 首次进场的状态是ongoing() {
+        Exam exam = new Exam();
+        exam.setId(1L);
+        exam.setStatus(ExamStatus.PUBLISHED.code());
+        exam.setStartAt(NOW.minusHours(1));
+        exam.setEndAt(NOW.plusHours(1));
+        exam.setDurationMinutes(60);
+        when(examMapper.selectById(1L)).thenReturn(exam);
+        when(recordMapper.findByExamAndUser(1L, 7L)).thenReturn(null);
+
+        ExamSessionService.StartResult result = service.start(1L, 7L);
+
+        assertEquals(RecordStatus.ONGOING.code(), result.status());
+    }
+
+    @Test
     void 正常交卷的用时按真实时间记() {
         // 20 分钟前进场，60 分钟的考试，现在交：还没到截止，用时就是 20 分钟
         ExamRecord record = new ExamRecord();

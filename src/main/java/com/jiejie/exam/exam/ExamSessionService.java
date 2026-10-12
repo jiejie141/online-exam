@@ -39,7 +39,16 @@ import java.util.stream.Collectors;
 public class ExamSessionService {
 
     /** 进入考试的结果。serverTime 是给学生端对齐时钟用的 */
-    public record StartResult(Long recordId, Long examId, LocalDateTime deadlineAt,
+    /**
+     * 进入考试的结果。serverTime 是给学生端对齐时钟用的。
+     *
+     * <p><b>status 是这份答卷当前的状态，不只是 "ongoing"。</b>
+     * 重复进入时返回的是**原来那份**答卷 —— 如果它已经交了卷，这里拿到的就是
+     * submitted/graded。调用方必须按 status 决定是进答题页还是跳成绩页：
+     * 只看"拿到卷子了"就渲染答题界面的话，学生会在一个已经交掉的卷子上继续答题，
+     * 而每一次保存都会被 saveAnswer 拒掉。卷面照样返回，是因为成绩页也要看原题。
+     */
+    public record StartResult(Long recordId, Long examId, String status, LocalDateTime deadlineAt,
                               LocalDateTime serverTime, List<PaperItem> paper) {
     }
 
@@ -104,8 +113,8 @@ public class ExamSessionService {
 
         ExamRecord existing = recordMapper.findByExamAndUser(examId, userId);
         if (existing != null) {
-            return new StartResult(existing.getId(), examId, existing.getDeadlineAt(), now,
-                    paper(examId));
+            return new StartResult(existing.getId(), examId, existing.getStatus(),
+                    existing.getDeadlineAt(), now, paper(examId));
         }
 
         LocalDateTime deadline = computeDeadline(now, exam.getDurationMinutes(), exam.getEndAt());
@@ -124,9 +133,11 @@ public class ExamSessionService {
             if (again == null) {
                 throw e;
             }
-            return new StartResult(again.getId(), examId, again.getDeadlineAt(), now, paper(examId));
+            return new StartResult(again.getId(), examId, again.getStatus(),
+                    again.getDeadlineAt(), now, paper(examId));
         }
-        return new StartResult(record.getId(), examId, deadline, now, paper(examId));
+        return new StartResult(record.getId(), examId, RecordStatus.ONGOING.code(),
+                deadline, now, paper(examId));
     }
 
     /**

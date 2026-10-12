@@ -35,10 +35,22 @@ public class ExamCloseJob {
     @Scheduled(fixedDelay = 60_000)
     public void run() {
         List<Exam> ended = examMapper.findPublishedEndedBefore(LocalDateTime.now(clock));
-        for (Exam exam : ended) {
-            exam.setStatus(ExamStatus.CLOSED.code());
-            examMapper.updateById(exam);
-            log.info("exam closed, examId={} title={}", exam.getId(), exam.getTitle());
+        if (ended.isEmpty()) {
+            return;
         }
+        int closed = 0;
+        for (Exam exam : ended) {
+            // 逐场兜住异常：一场更新失败不该让这一轮剩下的考试全被跳过。
+            // 下一轮（60 秒后）会重新捞到它，所以不用在这里重试。
+            try {
+                exam.setStatus(ExamStatus.CLOSED.code());
+                examMapper.updateById(exam);
+                closed++;
+                log.info("exam closed, examId={} title={}", exam.getId(), exam.getTitle());
+            } catch (Exception e) {
+                log.error("close exam failed, examId={}", exam.getId(), e);
+            }
+        }
+        log.debug("exam close sweep done, closed {} of {}", closed, ended.size());
     }
 }

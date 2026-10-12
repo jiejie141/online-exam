@@ -3,6 +3,7 @@ package com.jiejie.exam.security;
 import com.jiejie.exam.domain.entity.ExamUser;
 import com.jiejie.exam.domain.mapper.ExamUserMapper;
 import com.jiejie.exam.web.BusinessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -41,6 +42,10 @@ public class AuthService {
         if (!"student".equals(role) && !"teacher".equals(role)) {
             throw new BusinessException("角色只能是 student 或 teacher");
         }
+        // 先查一次是为了给出友好提示（大多数情况够了），但**不能只靠它**：
+        // 两个请求同时建同名用户时都会查不到，然后一起走到 insert。
+        // 真正裁决的是 uk_exam_user_username —— 捕获它转成同一句话，
+        // 而不是让并发窗口漏出一个 500。
         ExamUser exist = userMapper.findActiveByUsername(username);
         if (exist != null) {
             throw new BusinessException("用户名已存在: " + username);
@@ -51,7 +56,11 @@ public class AuthService {
         user.setRealName(realName);
         user.setRole(role);
         user.setStatus("active");
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            throw new BusinessException("用户名已存在: " + username);
+        }
         return user.getId();
     }
 }
