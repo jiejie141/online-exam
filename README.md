@@ -248,7 +248,7 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 mvn test
 ```
 
-97 条，全部为单元测试 / Mockito 打桩测试，不依赖任何外部中间件：
+116 条，全部为单元测试 / Mockito 打桩测试，不依赖任何外部中间件：
 
 | 测试类 | 条数 | 覆盖 |
 |---|---|---|
@@ -263,6 +263,8 @@ mvn test
 | `ExamCloseJobTest` | 3 | 到点关考、**一场失败不跳过剩下几场** |
 | `CountdownHandlerTest` | 12 | 未进场不让连、到点推 0 而不是负数、推送失败摘连接、广播与在线数 |
 | `StateMachineTest` | 5 | 题型/考试/答卷三种枚举的迁移规则 |
+| `GlobalExceptionHandlerTest` | 14 | 异常到 HTTP 的翻译：业务异常状态码跟着 code 走（401/403/404/降级 400）、四类客户端错误不被吞成 500、500 不泄露堆栈 |
+| `PaperItemTest` | 5 | 卷面 DTO 无 `answer` 字段（字段反射 + 序列化双重检查）、该有的字段一个不少、判断题不发 options |
 
 ## 八、已知限制（没做的，不装作做了）
 
