@@ -53,7 +53,11 @@ mkdir -p target
 # 它只在本地 8099 端口上活几分钟，不承担任何真实安全性。
 export EXAM_JWT_SECRET="${EXAM_JWT_SECRET:-e2e-only-local-secret-not-for-production-0123456789abcdef}"
 # 显式指定端口：某些环境会注入 SERVER__PORT 把 server.port 顶掉
-mvn -B -q spring-boot:run -Dspring-boot.run.arguments="--server.port=${PORT}" > "$LOG" 2>&1 &
+# 去掉 -q：它会把 Maven 的 INFO 一起压掉，而启动失败的原因经常就在
+# 被压掉的那几行里（CI 上就是只拿到一段 [ERROR] 套话，看不到真正的原因）。
+# 应用自己的日志本来就被下面的 > "$LOG" 收着，这里加上 Maven 的构建输出
+# 只会让文件大一点，换来的是失败时能直接看到原因。
+mvn -B spring-boot:run -e -Dspring-boot.run.arguments="--server.port=${PORT}" > "$LOG" 2>&1 &
 APP_PID=$!
 trap 'kill $APP_PID 2>/dev/null' EXIT
 
@@ -75,6 +79,14 @@ done
 if ! curl -s -f "${BASE}/actuator/health" > /dev/null 2>&1; then
   echo "!! 服务没起来，日志尾部："
   tail -40 "$LOG"
+  # Maven 的报错通常在日志中段（后面还接着它自己的一堆 [ERROR] 套话），
+  # 只 tail 尾部经常正好错过第一现场。再把第一个 ERROR 的上下文捞一遍。
+  if grep -q 'BUILD FAILURE\|ERROR' "$LOG" 2>/dev/null; then
+    echo "!! 日志里第一处 ERROR 的上下文："
+    n=$(grep -n 'ERROR' "$LOG" | head -1 | cut -d: -f1)
+    from=$((n > 12 ? n - 12 : 1))
+    sed -n "${from},$((n + 20))p" "$LOG"
+  fi
   exit 1
 fi
 
