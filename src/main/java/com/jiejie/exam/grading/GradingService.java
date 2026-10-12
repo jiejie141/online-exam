@@ -80,7 +80,10 @@ public class GradingService {
         if (rows == 0) {
             // 并发下另一个消费者先判完了。抛异常让本次事务整体回滚，
             // 避免 exam_answer 被写两遍。以先到者为准。
-            throw new BusinessException("答卷已被判分，忽略本次重复判分: " + recordId);
+            //
+            // 用 AlreadyGradedException 而不是 BusinessException：这是**正常**的重复，
+            // 不是故障。消费者对两者的处理相反（见该异常的类注释）。
+            throw new AlreadyGradedException(recordId);
         }
         return total;
     }

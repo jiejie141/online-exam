@@ -82,6 +82,10 @@ exam:
   grading:
     # true = 交卷后丢 MQ 异步判分；false = 同步判分（本地没起 RabbitMQ 时用这个）
     async: true
+    # 漏判扫描间隔。判分失败被消费者吞掉（不吞会被 Broker 无限重投），
+    # 所以需要一个任务定期把"交过卷但没分"的数量做成指标，否则失败是静默的。
+    # 30 秒是权衡：够快能及时发现，又不至于频繁打库（走 idx_record_deadline 前缀 status）。
+    sweep-delay-ms: ${EXAM_GRADING_SWEEP_DELAY_MS:30000}
   cache:
     paper-ttl-seconds: 600   # 卷面缓存 10 分钟，实际过期时刻带 ±20% 抖动
     null-ttl-seconds: 60     # 空卷面（哨兵）缓存 1 分钟就够，防止穿透

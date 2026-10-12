@@ -82,4 +82,25 @@ public interface ExamRecordMapper extends BaseMapper<ExamRecord> {
     @Update("UPDATE exam_record SET score = #{score}, status = 'graded' " +
             "WHERE id = #{id} AND status = 'submitted'")
     int markGraded(@Param("id") Long id, @Param("score") int score);
+
+    /**
+     * 漏判计数：已交卷但分数仍为 NULL 的记录。
+     *
+     * <p>这是 {@code GradingConsumer} 承诺过的那个发现手段，之前只在注释里，
+     * 现在补上实现。判分失败被消费者吞掉只记日志，所以「有没有卷子没判上」
+     * 不能靠翻日志回答 —— 日志不会告诉你此刻积压了几份。
+     *
+     * <p>为什么条件同时写 {@code status='submitted'} 和 {@code score IS NULL}：
+     * <ul>
+     *   <li>{@code status='submitted'} —— 只有交过卷的才该有分。ongoing 的行
+     *       本来就没分，把它们算进来会让这个指标永远不为 0，等于没有。</li>
+     *   <li>{@code score IS NULL} —— status 已经是 graded 但 score 仍为 NULL
+     *       属于脏状态（判分写了一半），也应计入。所以不能只按 status 判。</li>
+     * </ul>
+     *
+     * <p>走 idx_record_deadline(status, deadline_at) 的前缀 status ——
+     * 这一点在 V2 的注释里用真 MySQL EXPLAIN 验过，不是照索引名猜的。
+     */
+    @Select("SELECT COUNT(*) FROM exam_record WHERE status = 'submitted' AND score IS NULL")
+    long countUnscored();
 }

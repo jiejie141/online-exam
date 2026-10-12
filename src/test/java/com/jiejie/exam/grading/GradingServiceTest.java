@@ -98,13 +98,16 @@ class GradingServiceTest {
     }
 
     @Test
-    void 并发下markGraded返回0说明别人先判完了要报错让事务回滚() {
+    void 并发下markGraded返回0说明别人先判完了要抛AlreadyGraded让事务回滚() {
         when(recordMapper.selectById(100L)).thenReturn(record(RecordStatus.SUBMITTED.code(), null));
         when(examQuestionMapper.selectAnswerKey(1L)).thenReturn(List.of(keyRow(1L, "single", "A", 5)));
         when(answerMapper.listByRecord(100L)).thenReturn(List.of(answer(11L, 1L, "A")));
         when(recordMapper.markGraded(100L, 5)).thenReturn(0);
 
-        assertThrows(BusinessException.class, () -> gradingService.grade(100L));
+        // 事务仍要回滚（exam_answer 不能被写两遍），但类型是 AlreadyGraded 而非
+        // BusinessException —— 消费者要靠类型区分"正常重复"和"真失败"，
+        // 混用会让后者被静默吞掉。见 AlreadyGradedException 的类注释。
+        assertThrows(AlreadyGradedException.class, () -> gradingService.grade(100L));
     }
 
     @Test
