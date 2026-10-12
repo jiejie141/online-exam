@@ -134,6 +134,10 @@ jobs:
           # while read + 进程替换：grep 的整行（含空格）交给 while，
           # 不用 for $(...)：那样会按空格拆词，一条 '== 1/6 起依赖 =='
           # 会被拆成四条 notice。
+          # 先把文件本身的情况报出来：之前这个文件到底是空的、
+          # 还是没有匹配行，从外面分不清 —— 而这两种情况指向完全不同的原因。
+          echo "::notice::e2e-run.log 行数 = $(wc -l < target/e2e-run.log 2>/dev/null || echo '文件不存在')"
+          echo "::notice::e2e-run.log 前 8 行 = $(head -8 target/e2e-run.log 2>/dev/null | tr '\n' ' | ')"
           while IFS= read -r line; do
             echo "::notice::$line"
           done < <(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null)
