@@ -9,6 +9,12 @@ target/
 .git/
 .gitignore
 
+# 测试代码也不进构建上下文。
+# 镜像阶段用的是 mvn package -DskipTests，测试**源码**一行都不会被编译进去，
+# 但 COPY src 会把 src/test 一起传进 builder —— 白白让上下文变大，
+# 也让"改了一个测试"能打穿那一层缓存。
+src/test/
+
 # 本地跑出来的日志与探针输出（e2e.sh / bench.sh 会产生）
 *.log
 paper_probe.json

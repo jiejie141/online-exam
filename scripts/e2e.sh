@@ -16,13 +16,26 @@ echo "== 1/6 起依赖 =="
 docker compose up -d
 
 echo "== 2/6 等 MySQL 就绪 =="
+MYSQL_READY=0
 for i in $(seq 1 40); do
   if docker exec exam-mysql mysqladmin ping -uroot -proot --silent 2>/dev/null; then
     echo "MySQL ready after ${i} checks"
+    MYSQL_READY=1
     break
   fi
   sleep 2
 done
+
+# 等不到就得在这里停下。少了这段，循环只是走完，脚本会继续去建表，
+# 然后挂在一条难懂的 "docker exec" 报错上 —— 看起来像 SQL 有问题，
+# 实际是 MySQL 根本没起来。下面等应用启动的地方就是这么兜的，这里保持一致。
+if [ "$MYSQL_READY" -ne 1 ]; then
+  echo "!! MySQL 80 秒内没就绪，容器状态："
+  docker compose ps || true
+  echo "!! MySQL 日志尾部："
+  docker compose logs --tail 40 mysql || true
+  exit 1
+fi
 
 echo "== 3/6 建表 + 灌数据 =="
 docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/schema.sql
