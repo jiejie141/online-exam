@@ -1,7 +1,13 @@
 # 在线考试与自动判分系统
 
+[![CI](https://github.com/jiejie141/online-exam/actions/workflows/ci.yml/badge.svg)](https://github.com/jiejie141/online-exam/actions/workflows/ci.yml)
+
 一个能真的从头考到尾的考试系统：老师出题组卷发布，学生在时间窗内进入考试、答题、交卷，
 系统自动判分并给出成绩分布和逐题正确率。
+
+CI 上三个 job 都跑真东西：单元测试在 Java 17 / 21 双版本上跑，
+e2e job 连真 MySQL / Redis / RabbitMQ 跑完整流程（含判分延迟实测），
+docker job 真的构建镜像并验证「缺密钥就拒绝启动」。
 
 ---
 

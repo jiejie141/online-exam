@@ -389,6 +389,118 @@ cmd.exe /c "cd /d C:\Users\pc\Desktop\online-exam && git push origin main"
 
 ---
 
+### 2.9 一个只在「干净环境第一次启动」才出现的 bug
+
+这是整个项目里**最值得讲的一段**，因为它同时具备三个好素材：
+根因反直觉、本地复现不了、以及我在排查过程中一路走错。
+
+#### 现象
+
+推完代码，CI 第一次真的跑起来，`e2e` job 红了。日志里是：
+
+```
+Unable to obtain connection from database: Unknown database 'online_exam'
+SQL State  : 42000   Error Code : 1049
+```
+
+而**本地跑同一个脚本，24 项断言全过**。
+
+#### 根因
+
+发生在 `scripts/e2e.sh` 等 MySQL 就绪的那一步。原来的判据是：
+
+```bash
+docker exec exam-mysql mysqladmin ping -uroot -proot --silent
+```
+
+`mysqladmin ping` **走 unix socket**。而官方 `mysql` 镜像首次启动时，
+entrypoint 会先起一个**临时实例**做初始化：
+
+```
+[Entrypoint]: Initializing database files
+[Entrypoint]: Database files initialized
+[Entrypoint]: Starting temporary server          <- 临时实例起来了
+  ready for connections. ... port: 0              <- 只监听 socket，没有 TCP
+[Entrypoint]: Stopping temporary server
+[Entrypoint]: MySQL init process done. Ready for start up.
+  ready for connections. ... port: 3306           <- 这才是应用要连的实例
+```
+
+临时实例一活，`mysqladmin ping`（走 socket）就返回成功。脚本于是认为就绪，
+继续去执行 `schema.sql`。`CREATE DATABASE online_exam` **也返回 0** ——
+但那是写进临时实例的。临时实例一关，库就没了。
+
+十几秒后应用启动，Flyway 报 `Unknown database`。
+**错误信息指向数据库，而原因在于「我们问的那个 MySQL 是不是同一个」。**
+
+#### 为什么本地永远复现不了
+
+本地数据卷里的库早就建好了，容器**不会重新初始化**，
+所以永远走不到「临时实例」那条路径上。
+
+**这个 bug 只在第一次 `docker compose up` 的干净环境里出现。**
+换句话说：它专门等着新同事入职第一天、或者 CI 第一次运行时才发作。
+
+#### 修法
+
+把判据换成**走 TCP** 的版本：
+
+```bash
+docker exec exam-mysql mysqladmin -h 127.0.0.1 -uroot -proot ping --silent
+```
+
+临时实例是 `port: 0`，没有 TCP，连不上；连得上就说明正式实例已经在 3306 服务 ——
+**正是应用真正需要的那件事**。判据从「进程在不在」变成了「应用能不能连上」。
+
+同时给 `schema.sql` / `seed.sql` 两条 `docker exec` 补上退出码检查：
+原来不检查，而「建表悄悄失败、脚本继续往下走」正是这个问题难查的原因 ——
+日志里每一步都显示正常，直到十几秒后报一句风马牛不相及的错。
+
+修完 CI 全绿，进度里能看到 `MySQL ready after 5 checks (TCP 可查)`；
+应用 `app ready after 8 checks`（16 秒），5 分钟的等待预算绰绰有余。
+
+#### 如果被追问「你怎么发现的」——这才是真实过程
+
+诚实讲，我在这上面花了**十四轮**，而且前十三轮没找到它。过程是这样的：
+
+1. **前四轮**我一直在修「为什么 CI 看不到原因」：
+   先是 `::error::` 发不出来（GitHub 的 `run:` 默认带 `-e`，管道那行非 0 就退出了），
+   改成逐行 `::notice::`，40 行只收到 10 行。
+   然后才发现 **annotation 有条数上限（约 10 条，超出静默丢弃）**，
+   而且每条还有长度上限会截断。
+2. **第五轮**终于发现 `e2e.sh` **一次都没跑过** ——
+   workflow 里写的是 `bash scripts/e2e.sh > target/e2e-run.log 2>&1`，
+   而**重定向是 shell 在启动 bash 之前处理的**；`target/` 不在仓库里（被 gitignore），
+   shell 直接拒绝建立重定向，命令根本不执行，`$?` 拿到 1。
+   加一句 `mkdir -p target` 就解决了。
+3. **第六到十三轮**都在拿应用日志。
+   每换一种方式（`grep` 截取、`tail`、artifact），就撞上另一个「信息通道本身的上限」。
+4. **第十四轮**把日志 gzip+base64 切片发出来，才第一次看到真正的异常：
+   `Unknown database 'online_exam'`。
+
+#### 这段经历本身才是最该讲的部分
+
+回头看，十四轮里只有**两轮**在修项目真正的 bug（`target/` 目录、MySQL 判据），
+**其余十二轮都在修「我看不见」。**
+
+这与本项目里另一个教训是同一个形状 ——
+README 里「测量精度会被测量方法本身限制」（50 ms 轮询把延迟量化成了 50/100/150 ms）：
+
+> **一个只能看到 exit code 的 CI，等于没有 CI。**
+> **一个会把消息静默丢弃的通道，等于没有通道。**
+
+而最尖锐的一句是：
+
+> 我把「没看到」当成了「不存在」。
+> 先是「脚本没跑」被当成「脚本跑了但出错」，
+> 再是「消息被丢弃」被当成「消息没产生」，
+> 最后是「库建在临时实例上」被当成「库没建起来」。
+> 三次都是**先假设了证据链的最后一环是完好的**。
+
+如果面试官问「这个 bug 你怎么定位的」，
+**不要只讲 `mysqladmin ping` 那个点** —— 那个点十分钟就能讲完，
+而「我怎么知道该往哪看」才是我真正想说的能力。
+
 ## 三、已知限制（必须主动说，别等被问）
 
 README 第八节列了 10 条，**挑这几条主动说**，能证明你分得清“做完”和“没做”：
