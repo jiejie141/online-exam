@@ -126,79 +126,46 @@ jobs:
       # 所以这里不重复声明 services —— 保持「本地怎么跑，CI 就怎么跑」。
       - name: 跑端到端（含判分延迟实测）
         run: |
-          # 把每一步都发成 annotation 的 notice。
-          # 理由：这个 job 失败时，匿名能拿到的只有 annotation 和
-          # exit code 1 这一行；job 日志正文要认证才下得动。
-          # 所以「挂在哪一步」必须主动推出来，不能指望有人去翻网页。
+          # 这个 job 失败时，匿名能拿到的只有 annotation（job 日志下载要认证）。
+          # 而 annotation 有条数上限（约 10 条），**超出的会被静默丢弃** ——
+          # 我一开始逐行发 notice，40 行只收到 10 行，看起来像日志是空的。
           #
-          # 两个坑，都实际踩到了：
-          #
-          # 1. GitHub 的 run 默认带 -e。管道那行返回非 0 时，脚本立刻退出，
-          #    后面的 PIPESTATUS 和 echo notice 全都不执行 ——
-          #    表现是失败时一条 notice 都没有，看起来像这段根本不存在。
-          #    改成重定向到文件 + 手动记 rc，就不用管道了。
-          #
-          # 2. 不用 | while 发 notice：while 跑在子 shell 里，rc 传不回来。
-          #    用 for + 命令替换。
+          # 所以这里一共只发 3 条：退出码、进度序列（压成一行）、失败提示。
           set +e
-          # 必须先建 target/：下面这行的重定向**发生在 bash 启动之前**。
-          # 目录不存在时，shell 直接拒绝建立重定向，命令根本不执行，
-          # $? 得到 1 —— 于是 e2e.sh 一次都没跑过，
-          # 而外面看到的只是「退出码 1 + 没有日志文件」，
-          # 很容易误判成「脚本内部某一步错了」。
-          # 这个目录在仓库里是被 .gitignore 掉的，checkout 出来自然没有。
+          # 重定向在 bash 启动**之前**由 shell 处理：target/ 不存在时
+          # shell 直接拒绝，命令根本不执行，$? 拿到 1 ——
+          # e2e.sh 一次都没跑过，而外面看到的只是『退出码 1』。
+          # target/ 在 .gitignore 里，checkout 出来没有。
           mkdir -p target
           bash scripts/e2e.sh > target/e2e-run.log 2>&1
           rc=$?
           cat target/e2e-run.log
-          echo "::notice::e2e.sh 退出码 = $rc"
-          # while read + 进程替换：grep 的整行（含空格）交给 while，
-          # 不用 for $(...)：那样会按空格拆词，一条 '== 1/6 起依赖 =='
-          # 会被拆成四条 notice。
-          # 先把文件本身的情况报出来：之前这个文件到底是空的、
-          # 还是没有匹配行，从外面分不清 —— 而这两种情况指向完全不同的原因。
-          echo "::notice::e2e-run.log 行数 = $(wc -l < target/e2e-run.log 2>/dev/null || echo '文件不存在')"
-          echo "::notice::e2e-run.log 前 8 行 = $(head -8 target/e2e-run.log 2>/dev/null | tr '\n' ' | ')"
-          while IFS= read -r line; do
-            echo "::notice::$line"
-          done < <(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null)
-          # 应用起不来时，答案在那份日志尾部（e2e.sh 会 tail -40）。
-          # 上面那条 grep 只认 '== ' 和 '!!' 开头，恰好漏掉真正有用的部分。
-          #
-          # 这里不用 grep -q + 行号定位：上一版那么写，结果什么都没推出来，
-          # 而『什么都没推出来』和『日志本来就是空的』在外部看起来一样。
-          # 直接用 sed 截取，并且**无论有没有内容都推一条说明**，
-          # 免得又回到「分不清是没内容还是没执行」。
-          if [ -s target/e2e-run.log ]; then
-            echo "::notice::最后 40 行日志开始"
-            tail -40 target/e2e-run.log | while IFS= read -r line; do
-              echo "::notice::$line"
-            done
-            echo "::notice::最后 40 行日志结束"
-          else
-            echo "::notice::e2e-run.log 是空的，e2e.sh 没产生任何输出"
-          fi
+          steps=$(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null | tr '\n' ' ' | head -c 700)
+          echo "::error title=e2e.sh 退出码=${rc}::${steps:-（没有任何进度输出）}"
           exit $rc
 
+      # 失败时把关键信息**压缩成极少数几行**推出来。
+      #
+      # 前两版都失败在一个我没预料的地方：GitHub 对每个 job 的 annotation
+      # 数量有上限（大约 10 条），而且**超出的会被静默丢弃**。
+      # 我一行一条 notice 地推 40 行日志，结果只收到 10 条，
+      # 而且顺序是乱的 —— 看起来像『日志是空的』，实际是『发不出去』。
+      #
+      # 所以这里改成：把每段信息压成**一行**，总共不超过 5 条。
       - name: 服务日志（失败时才有用）
         if: failure()
         run: |
-          echo '=== 应用日志 ==='; tail -80 target/e2e-app.log 2>/dev/null || true
+          echo '=== 应用日志 ==='; tail -60 target/e2e-app.log 2>/dev/null || true
           echo '=== 容器状态 ==='; docker compose ps || true
-          echo '=== MySQL 日志 ==='; docker compose logs --tail 40 mysql || true
-          echo '=== 校验脚本输出（关键） ==='
-          # e2e_check.py 的失败项和 e2e.sh 的 !! 提示都在这里
-          grep -E '^\s*(PASS|FAIL|SKIP)|通过 [0-9]+ 项|^!!|^==' target/e2e-check.log 2>/dev/null \
-            | tail -40 \
-            || echo '(没有 target/e2e-check.log)'
-          echo '=== 校验脚本输出（关键） ==='
-          grep -E 'PASS|FAIL|SKIP|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -30 || echo '(无 e2e-check.log)'
-          summary=$(grep -E '^\s*FAIL|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -12 | tr '\n' ' ')
-          if [ -n "$summary" ]; then
-            echo "::error title=e2e 校验失败::$summary"
-          else
-            echo "::error title=e2e 失败::e2e_check.py 没产生输出，失败发生在更早的步骤（见上面的进度 notice）"
-          fi
+          echo '=== e2e.sh 输出 ==='; cat target/e2e-run.log 2>/dev/null || true
+          echo '=== 校验脚本输出 ==='; cat target/e2e-check.log 2>/dev/null || true
+          # 压缩版：一行摘要，保证发得出去
+          app_last=$(tail -6 target/e2e-app.log 2>/dev/null | tr '\n' ' ' | head -c 900)
+          echo "::error title=应用日志尾部::${app_last:-（target/e2e-app.log 为空或不存在）}"
+          run_last=$(tail -3 target/e2e-run.log 2>/dev/null | tr '\n' ' ' | head -c 900)
+          echo "::error title=e2e.sh 输出尾部::${run_last:-（空）}"
+          parts=$(docker compose ps --format '{{.Name}}:{{.State}}' 2>/dev/null | tr '\n' ' ')
+          echo "::error title=容器状态::${parts:-（取不到）}"
 
   docker:
     name: 镜像构建
