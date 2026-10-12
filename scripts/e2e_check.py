@@ -32,6 +32,20 @@ def check(name, ok, detail=""):
         print(f"  FAIL  {name}  {detail}")
 
 
+def decode_body(resp):
+    """按响应类型解码，不假设一定是 JSON。
+
+    /actuator/prometheus 返回的是**纯文本**指标格式（# HELP / # TYPE / 名字 值）。
+    对它无条件 json.loads 会抛 JSONDecodeError —— 而这个异常抛在 check()
+    之前，会让整个脚本崩在第 12 步，**前面已经跑过的检查结果也一起丢掉**，
+    看起来像"整个 e2e 挂了"，实际只是最后一步的解析方式不对。
+    """
+    raw = resp.read().decode() or ""
+    if "json" in (resp.headers.get("Content-Type") or ""):
+        return json.loads(raw or "{}")
+    return raw
+
+
 class Api:
     def __init__(self, base):
         self.base = base.rstrip("/")
@@ -44,7 +58,7 @@ class Api:
         data = json.dumps(body).encode() if body is not None else None
         try:
             with urllib.request.urlopen(req, data, timeout=30) as resp:
-                return resp.status, json.loads(resp.read().decode() or "{}")
+                return resp.status, decode_body(resp)
         except urllib.error.HTTPError as e:
             raw = e.read().decode()
             try:
@@ -137,12 +151,33 @@ def main():
     # 手算总分 = 60 + 15 + 7 + 5 + 0 = 87
     answers = ["B", "C", "B", "B", "C", "C", "ABCD", "AB", "T", "T"]
     expected = 87
-    for item, ans in zip(paper, answers):
-        st, _ = api.call("POST", f"/api/records/{record_id}/answers", token=ss,
-                         body={"questionId": item["id"], "answer": ans})
-        if st != 200:
-            check(f"保存第 {item['seq']} 题", False, f"http {st}")
-    check("10 道题作答全部保存成功", True)
+
+    # 这个脚本**不保证库是干净的**：直接对着一个已经跑过的库再跑一遍，
+    # s001 那份答卷已经是 submitted/graded，saveAnswer 会（正确地）
+    # 拒绝修改已交卷的答卷，10 个保存全返回 400。
+    #
+    # 以前这里循环里报 FAIL、循环后却写死 check(..., True) ——
+    # 那个断言永远不会失败，是个装饰。结果是"10 条 FAIL + 1 条 PASS"
+    # 同时出现，看日志的人得自己猜哪个算数。
+    #
+    # 现在按答卷状态区分两种情况：还开着就真保存并断言条数，
+    # 已经交了就说明"跳过的原因"，不再拿一个不可能失败的断言凑数。
+    st, body = api.call("POST", f"/api/exams/{exam_id}/start", token=ss)
+    already_done = body["data"].get("status") in ("submitted", "graded")
+    if already_done:
+        print(f"  SKIP  答卷已是 {body['data']['status']}，跳过作答（重复运行同一套库）")
+    else:
+        saved = 0
+        for item, ans in zip(paper, answers):
+            st, _ = api.call("POST", f"/api/records/{record_id}/answers", token=ss,
+                             body={"questionId": item["id"], "answer": ans})
+            if st == 200:
+                saved += 1
+            else:
+                check(f"保存第 {item['seq']} 题", False, f"http {st}")
+        # 断言的是真的条数，不是写死的 True
+        check("10 道题作答全部保存成功", saved == len(answers),
+              f"成功 {saved}/{len(answers)}")
 
     print("\n[6] 交卷与判分（异步 MQ）")
     score, latency_ms, err = submit_and_wait(api, ss, record_id)
@@ -239,19 +274,31 @@ def main():
     # 单测只能验到第二段，SQL 和暴露这两段只有连真库跑才验得到 —— 这正是本脚本存在的理由。
     # 带老师令牌：/actuator/prometheus 不在匿名放行名单里
     # （只有 health 和 info 是），不带令牌会 401/403。
-    st, body = api.call("GET", "/actuator/prometheus", token=tt)
-    raw = body if isinstance(body, str) else str(body)
-    check("Prometheus 端点可访问（带令牌）", st == 200, f"http {st}")
+    # 用 raw() 而不是 call()：这个端点的响应体是纯文本指标，
+    # call() 的语义是"JSON 接口"。这里要的就是原始文本。
+    try:
+        raw = api.raw("/actuator/prometheus", token=tt)
+        prom_ok = True
+    except urllib.error.HTTPError as e:
+        raw = ""
+        prom_ok = False
+        prom_code = e.code
+    except Exception as e:  # noqa: BLE001
+        raw = ""
+        prom_ok = False
+        prom_code = type(e).__name__
+    check("Prometheus 端点可访问（带令牌）", prom_ok,
+          "http 200" if prom_ok else f"取不到：{prom_code}")
     m = re.search(r"^exam_grading_unscored\s+([0-9.]+)$", raw, re.M)
     check("exam_grading_unscored 指标已暴露", m is not None,
-          "未找到，检查 GradingMetrics 是否被注册、management.endpoints 是否含 prometheus")
+          "" if m else "未找到，检查 GradingMetrics 是否被注册、management.endpoints 是否含 prometheus")
     if m:
         # 这一步跑在刚交完卷、判分已完成的干净库上，所以必须是 0。
         # 非 0 意味着有卷子交了但没判上 —— 那正是这个指标要报的警。
         check("刚交完卷的库上漏判数为 0", float(m.group(1)) == 0.0, f"实际 {m.group(1)}")
     check("exam_grading_failed_total 指标已暴露",
           "exam_grading_failed_total" in raw,
-          "未找到，检查 GradingMetrics 的 Counter 是否注册")
+          "" if "exam_grading_failed_total" in raw else "未找到，检查 GradingMetrics 的 Counter 是否注册")
 
     print("\n" + "=" * 58)
     print(f"通过 {PASSES} 项，失败 {len(FAILS)} 项")

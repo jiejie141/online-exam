@@ -365,6 +365,30 @@ Migration checksum mismatch for migration version 2
 
 ---
 
+### 2.8 推代码时撞上的一次环境问题（不是代码问题，但值得记）
+
+**现象**：在 WSL 里 `git push` 报
+`SSL certificate verification failed: certificate signer not trusted`。
+
+**排查**：这不是认证失败（没提示要密码/token），也不是仓库配置问题 ——
+是 **WSL 那侧的 CA 证书库不全**，GitHub 的证书链验不过。
+
+**解决**：改用 **Windows 侧的 git** 推（它有系统证书库）：
+```
+cmd.exe /c "cd /d C:\Users\pc\Desktop\online-exam && git push origin main"
+```
+一次就成。
+
+**为什么值得记**：这类问题的特征是**错误信息指向的地方不是原因所在** ——
+它说 "certificate"，容易让人去查 token、代理、仓库权限，而真正要动的是
+"用哪个 git"。**先看错误里到底提到没提到"认证"，再决定查哪层。**
+
+（同理，这个项目本地跑 e2e 时也撞过 WSL 没有 docker CLI、
+以及 `mvn` 的 shell 脚本在 Git Bash 里 ClassNotFoundException、
+必须用 `mvn.cmd` —— 三个都是"工具链在哪一侧"的问题，不是代码问题。）
+
+---
+
 ## 三、已知限制（必须主动说，别等被问）
 
 README 第八节列了 10 条，**挑这几条主动说**，能证明你分得清“做完”和“没做”：
