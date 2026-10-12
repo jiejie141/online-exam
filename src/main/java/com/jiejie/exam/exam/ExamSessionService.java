@@ -204,7 +204,12 @@ public class ExamSessionService {
         }
 
         LocalDateTime now = LocalDateTime.now(clock);
-        int seconds = (int) Math.max(0, Duration.between(record.getStartedAt(), now).toSeconds());
+        // 用时按"开始 → 应截止"记，和 AutoSubmitJob 一个口径：
+        // 学生答完不点交卷、过半小时才回来点，那半小时不是答题时间。
+        // 用 min(now, deadline) 而不是直接取 deadline：正常交卷（now < deadline）
+        // 记的是真实用时，只有超时才被夹到 deadline。
+        LocalDateTime usedUntil = now.isAfter(record.getDeadlineAt()) ? record.getDeadlineAt() : now;
+        int seconds = (int) Math.max(0, Duration.between(record.getStartedAt(), usedUntil).toSeconds());
         int rows = recordMapper.markSubmitted(recordId, now, seconds);
         if (rows == 0) {
             // 并发重复交卷：另一个请求已经把状态改走了。以先到者为准

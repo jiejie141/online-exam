@@ -270,6 +270,7 @@ class ExamSessionServiceTest {
         record.setExamId(1L);
         record.setStatus(RecordStatus.ONGOING.code());
         record.setStartedAt(NOW.minusMinutes(20));
+        record.setDeadlineAt(NOW.plusMinutes(40));
         when(recordMapper.selectById(500L)).thenReturn(record);
         when(recordMapper.markSubmitted(eq(500L), eq(NOW), eq(1200))).thenReturn(1);
         when(gradingProducer.trySend(500L)).thenReturn(true);
@@ -282,6 +283,49 @@ class ExamSessionServiceTest {
     }
 
     @Test
+    void 正常交卷的用时按真实时间记() {
+        // 20 分钟前进场，60 分钟的考试，现在交：还没到截止，用时就是 20 分钟
+        ExamRecord record = new ExamRecord();
+        record.setId(500L);
+        record.setUserId(7L);
+        record.setExamId(1L);
+        record.setStatus(RecordStatus.ONGOING.code());
+        record.setStartedAt(NOW.minusMinutes(20));
+        record.setDeadlineAt(NOW.plusMinutes(40));
+        when(recordMapper.selectById(500L)).thenReturn(record);
+        when(recordMapper.markSubmitted(eq(500L), eq(NOW), eq(1200))).thenReturn(1);
+        when(gradingProducer.trySend(500L)).thenReturn(true);
+
+        service.submit(500L, 7L);
+
+        // submitted_at 仍然是真实的交卷时刻
+        verify(recordMapper).markSubmitted(eq(500L), eq(NOW), eq(1200));
+    }
+
+    @Test
+    void 超时很久才点交卷的用时被夹到截止时间() {
+        // README 的口径：用时按"开始 -> 应截止"记。
+        // 学生 20 分钟前进场、10 分钟前就已截止，现在才点交卷：
+        // 真实用时是 20 分钟，但超过截止的那 10 分钟不是答题时间。
+        ExamRecord record = new ExamRecord();
+        record.setId(500L);
+        record.setUserId(7L);
+        record.setExamId(1L);
+        record.setStatus(RecordStatus.ONGOING.code());
+        record.setStartedAt(NOW.minusMinutes(20));
+        record.setDeadlineAt(NOW.minusMinutes(10));
+        when(recordMapper.selectById(500L)).thenReturn(record);
+        when(recordMapper.markSubmitted(eq(500L), eq(NOW), eq(600))).thenReturn(1);
+        when(gradingProducer.trySend(500L)).thenReturn(true);
+
+        service.submit(500L, 7L);
+
+        // 记 600 秒（开始 -> 截止），不是 1200 秒（开始 -> 现在）；
+        // 但 submitted_at 仍是真实的 NOW，两者语义不同不能混
+        verify(recordMapper).markSubmitted(eq(500L), eq(NOW), eq(600));
+    }
+
+    @Test
     void 消息投递失败时降级成同步判分不能把卷子挂在未判分() {
         ExamRecord record = new ExamRecord();
         record.setId(500L);
@@ -289,6 +333,7 @@ class ExamSessionServiceTest {
         record.setExamId(1L);
         record.setStatus(RecordStatus.ONGOING.code());
         record.setStartedAt(NOW.minusMinutes(20));
+        record.setDeadlineAt(NOW.plusMinutes(40));
         when(recordMapper.selectById(500L)).thenReturn(record);
         when(recordMapper.markSubmitted(eq(500L), eq(NOW), eq(1200))).thenReturn(1);
         when(gradingProducer.trySend(500L)).thenReturn(false);
@@ -308,6 +353,7 @@ class ExamSessionServiceTest {
         record.setExamId(1L);
         record.setStatus(RecordStatus.ONGOING.code());
         record.setStartedAt(NOW.minusMinutes(20));
+        record.setDeadlineAt(NOW.plusMinutes(40));
         when(recordMapper.selectById(500L)).thenReturn(record);
         when(recordMapper.markSubmitted(eq(500L), eq(NOW), eq(1200))).thenReturn(0);
 
