@@ -160,7 +160,7 @@ jobs:
           echo '=== e2e.sh 输出 ==='; cat target/e2e-run.log 2>/dev/null || true
           echo '=== 校验脚本输出 ==='; cat target/e2e-check.log 2>/dev/null || true
           # 压缩版：一行摘要，保证发得出去
-          app_last=$(tail -6 target/e2e-app.log 2>/dev/null | tr '\n' ' ' | head -c 900)
+          app_last=$(tail -30 target/e2e-app.log 2>/dev/null | tr '\n' ' ' | head -c 1500)
           echo "::error title=应用日志尾部::${app_last:-（target/e2e-app.log 为空或不存在）}"
           run_last=$(tail -3 target/e2e-run.log 2>/dev/null | tr '\n' ' ' | head -c 900)
           echo "::error title=e2e.sh 输出尾部::${run_last:-（空）}"
