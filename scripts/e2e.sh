@@ -16,10 +16,28 @@ echo "== 1/6 起依赖 =="
 docker compose up -d
 
 echo "== 2/6 等 MySQL 就绪 =="
+# 判据是「能通过 TCP 真的查到东西」，不是「mysqladmin ping 通」。
+#
+# ★ 这是我在 CI 上实际踩到的坑：
+#   官方 mysql 镜像首次启动时，entrypoint 会先起一个**临时实例**做初始化
+#   （日志里是 'Starting temporary server'），初始化完再关掉它、起正式实例。
+#   而临时实例**只监听 unix socket、不监听 TCP**（日志里 port: 0）。
+#
+#   原来的写法是 docker exec mysqladmin ping —— 它走 socket，
+#   在临时实例上就会返回成功。于是脚本以为 MySQL 好了，开开心心去建表，
+#   CREATE DATABASE 也确实返回 0 —— 但那是写进临时实例的，
+#   临时实例一关，库就没了。紧接着应用启动，Flyway 报
+#   "Unknown database 'online_exam'"，看起来完全像是 SQL 脚本或应用的问题。
+#
+#   本地一直没暴露：数据卷里的库早就建好了，容器不会重新初始化，
+#   所以永远走不到那条路径上。
+#
+# 用 -h 127.0.0.1 强制走 TCP：临时实例没有 TCP，连不上；
+# 能连上就说明正式实例已经在 3306 上服务了 —— 正是应用需要的那件事。
 MYSQL_READY=0
 for i in $(seq 1 40); do
-  if docker exec exam-mysql mysqladmin ping -uroot -proot --silent 2>/dev/null; then
-    echo "MySQL ready after ${i} checks"
+  if docker exec exam-mysql mysqladmin -h 127.0.0.1 -uroot -proot ping --silent >/dev/null 2>&1; then
+    echo "MySQL ready after ${i} checks (TCP 可查)"
     MYSQL_READY=1
     break
   fi
@@ -38,8 +56,14 @@ if [ "$MYSQL_READY" -ne 1 ]; then
 fi
 
 echo "== 3/6 建表 + 灌数据 =="
-docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/schema.sql
-docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/seed.sql
+# 每一步都检查退出码。
+# 原来这两行不检查 —— 而『建表悄悄失败、脚本继续往下走』正是
+# 上面那个 CI 问题难查的原因：日志里每一步都是『正常』，
+# 直到十几秒后应用启动时报一句风马牛不相及的 Unknown database。
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/schema.sql \
+  || { echo "!! schema.sql 执行失败"; exit 1; }
+docker exec -i exam-mysql mysql -uroot -proot --default-character-set=utf8mb4 < src/main/resources/db/seed.sql \
+  || { echo "!! seed.sql 执行失败"; exit 1; }
 docker exec exam-mysql mysql -uroot -proot -e \
   "SELECT (SELECT COUNT(*) FROM question) AS questions, \
           (SELECT COUNT(*) FROM exam_question) AS paper_items, \
