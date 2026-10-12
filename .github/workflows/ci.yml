@@ -111,7 +111,20 @@ jobs:
       # e2e.sh 自己会 docker compose up -d 并等 MySQL 就绪，
       # 所以这里不重复声明 services —— 保持「本地怎么跑，CI 就怎么跑」。
       - name: 跑端到端（含判分延迟实测）
-        run: bash scripts/e2e.sh
+        run: |
+          # 把每一步都发成 annotation 的 notice。
+          # 理由：这个 job 失败时，匿名能拿到的只有 annotation 和
+          # "exit code 1" 这一行；job 日志正文要认证才下得动。
+          # 所以「挂在哪一步」这个信息必须主动推出来，不能指望有人去翻网页。
+          # 用 tee 而不是重定向：默认输出照常（网页上看得到），
+          # 同时落一份文件，跑完不管成败都吐进度。
+          set -o pipefail
+          bash scripts/e2e.sh 2>&1 | tee target/e2e-run.log
+          rc=${PIPESTATUS[0]}
+          echo "::notice::e2e.sh 退出码 = $rc"
+          grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null \
+            | while IFS= read -r line; do echo "::notice::$line"; done
+          exit $rc
 
       # 失败时把关键输出**同时**发成 annotation。
       #
@@ -131,9 +144,14 @@ jobs:
           grep -E '^\s*(PASS|FAIL|SKIP)|通过 [0-9]+ 项|^!!|^==' target/e2e-check.log 2>/dev/null \
             | tail -40 \
             || echo '(没有 target/e2e-check.log)'
-          {
-            echo "::error title=e2e 失败摘要::$(grep -E '^\s*FAIL|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -12 | tr '\n' ' ' | head -c 900)"
-          } || true
+          echo '=== 校验脚本输出（关键） ==='
+          grep -E 'PASS|FAIL|SKIP|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -30 || echo '(无 e2e-check.log)'
+          summary=$(grep -E '^\s*FAIL|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -12 | tr '\n' ' ')
+          if [ -n "$summary" ]; then
+            echo "::error title=e2e 校验失败::$summary"
+          else
+            echo "::error title=e2e 失败::e2e_check.py 没产生输出，失败发生在更早的步骤（见上面的进度 notice）"
+          fi
 
   docker:
     name: 镜像构建
