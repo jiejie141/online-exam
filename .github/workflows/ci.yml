@@ -127,6 +127,13 @@ jobs:
           # 2. 不用 | while 发 notice：while 跑在子 shell 里，rc 传不回来。
           #    用 for + 命令替换。
           set +e
+          # 必须先建 target/：下面这行的重定向**发生在 bash 启动之前**。
+          # 目录不存在时，shell 直接拒绝建立重定向，命令根本不执行，
+          # $? 得到 1 —— 于是 e2e.sh 一次都没跑过，
+          # 而外面看到的只是「退出码 1 + 没有日志文件」，
+          # 很容易误判成「脚本内部某一步错了」。
+          # 这个目录在仓库里是被 .gitignore 掉的，checkout 出来自然没有。
+          mkdir -p target
           bash scripts/e2e.sh > target/e2e-run.log 2>&1
           rc=$?
           cat target/e2e-run.log
