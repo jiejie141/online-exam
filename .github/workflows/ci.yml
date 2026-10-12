@@ -113,12 +113,27 @@ jobs:
       - name: 跑端到端（含判分延迟实测）
         run: bash scripts/e2e.sh
 
+      # 失败时把关键输出**同时**发成 annotation。
+      #
+      # 为什么不能只 echo：这个仓库是公开的，但 job 日志的下载接口
+      # 对匿名请求返回 403（需要认证）。也就是说 —— 手边没有 gh CLI、
+      # 没登录的情况下，日志正文是拿不到的，只能看到「exit code 1」。
+      # annotation 是匿名可读的，把失败摘要塞进去，
+      # 排查的人（包括未来的我）不看网页也能知道挂在哪。
       - name: 服务日志（失败时才有用）
         if: failure()
         run: |
           echo '=== 应用日志 ==='; tail -80 target/e2e-app.log 2>/dev/null || true
           echo '=== 容器状态 ==='; docker compose ps || true
           echo '=== MySQL 日志 ==='; docker compose logs --tail 40 mysql || true
+          echo '=== 校验脚本输出（关键） ==='
+          # e2e_check.py 的失败项和 e2e.sh 的 !! 提示都在这里
+          grep -E '^\s*(PASS|FAIL|SKIP)|通过 [0-9]+ 项|^!!|^==' target/e2e-check.log 2>/dev/null \
+            | tail -40 \
+            || echo '(没有 target/e2e-check.log)'
+          {
+            echo "::error title=e2e 失败摘要::$(grep -E '^\s*FAIL|通过 [0-9]+ 项' target/e2e-check.log 2>/dev/null | tail -12 | tr '\n' ' ' | head -c 900)"
+          } || true
 
   docker:
     name: 镜像构建

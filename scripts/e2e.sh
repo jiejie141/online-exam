@@ -73,8 +73,12 @@ fi
 
 echo "== 5/6 接口校验 =="
 # Windows 控制台默认 GBK，不设这个中文题干会打成一串转义符
-PYTHONIOENCODING=utf-8 python scripts/e2e_check.py --base "$BASE"
-CHECK_RC=$?
+# tee 一份到文件：失败时 CI 的注释（annotation）要从这里取摘要，
+# 匿名看 job 页面是拿不到日志正文的（下载接口要认证）。
+PYTHONIOENCODING=utf-8 python scripts/e2e_check.py --base "$BASE" 2>&1 | tee target/e2e-check.log
+# 上面是管道，$? 会变成 tee 的退出码 —— 用 PIPESTATUS 拿 python 的。
+# 这一点和 ci.yml 里那个 docker run 是同一个坑，别改成 $?。
+CHECK_RC=${PIPESTATUS[0]}
 
 echo "== 6/6 收尾 =="
 if [ "$CHECK_RC" -ne 0 ]; then
