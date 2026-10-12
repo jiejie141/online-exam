@@ -172,7 +172,7 @@ README 第 249 行有一张测试覆盖表，其中一行是：
 
 | 简历说法 | 核实结果 |
 |---|---|
-| 58 条单元测试 | ✅ 准确，@Test 计数 = 58（另有 6 条未提交的 JwtUtilTest） |
+| 58 条单元测试 | ⚠️ **当时准确，现在已过时**：@Test 计数已到 **85**（补了 GradingConsumerTest / GradingSweepJobTest / ExamCloseJobTest / AuthServiceTest 等）。这份校验表是对 10-12 当天状态的快照，不是实时值 |
 | 判分 13 个用例 | ✅ GradingRuleTest 确实 13 个 @Test |
 | 50 份全部 87 分，与手算一致 | ✅ README 如实记录，含多选漏选半分 |
 | 交卷→出分 p99 48 ms（avg 28） | ✅ README 实测表 |
