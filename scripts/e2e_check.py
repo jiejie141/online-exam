@@ -12,6 +12,7 @@
 import argparse
 import json
 import statistics
+import re
 import sys
 import time
 import urllib.error
@@ -227,6 +228,30 @@ def main():
         check("批量判分分数一致（都是 87）", set(scores) == {87}, f"出现过的分数 {set(scores)}")
     else:
         check("批量判分", False, "一份都没判成功")
+
+    print("\n[12] 漏判指标（判分失败的发现手段）")
+    # 判分走 MQ，消费者有意不把异常抛回 Broker（抛回去会无限重投），
+    # 所以"有卷子没判上"这件事必须靠指标发现，不能靠翻日志 ——
+    # 日志回答不了"此刻积压了几份"。
+    #
+    # 这里直接查 Prometheus 端点，验的是**整条链路**：
+    # Mapper 的 SQL 能跑 -> 扫描任务把数写进 Gauge -> Actuator 暴露出来。
+    # 单测只能验到第二段，SQL 和暴露这两段只有连真库跑才验得到 —— 这正是本脚本存在的理由。
+    # 带老师令牌：/actuator/prometheus 不在匿名放行名单里
+    # （只有 health 和 info 是），不带令牌会 401/403。
+    st, body = api.call("GET", "/actuator/prometheus", token=tt)
+    raw = body if isinstance(body, str) else str(body)
+    check("Prometheus 端点可访问（带令牌）", st == 200, f"http {st}")
+    m = re.search(r"^exam_grading_unscored\s+([0-9.]+)$", raw, re.M)
+    check("exam_grading_unscored 指标已暴露", m is not None,
+          "未找到，检查 GradingMetrics 是否被注册、management.endpoints 是否含 prometheus")
+    if m:
+        # 这一步跑在刚交完卷、判分已完成的干净库上，所以必须是 0。
+        # 非 0 意味着有卷子交了但没判上 —— 那正是这个指标要报的警。
+        check("刚交完卷的库上漏判数为 0", float(m.group(1)) == 0.0, f"实际 {m.group(1)}")
+    check("exam_grading_failed_total 指标已暴露",
+          "exam_grading_failed_total" in raw,
+          "未找到，检查 GradingMetrics 的 Counter 是否注册")
 
     print("\n" + "=" * 58)
     print(f"通过 {PASSES} 项，失败 {len(FAILS)} 项")
