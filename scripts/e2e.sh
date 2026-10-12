@@ -57,7 +57,14 @@ mvn -B -q spring-boot:run -Dspring-boot.run.arguments="--server.port=${PORT}" > 
 APP_PID=$!
 trap 'kill $APP_PID 2>/dev/null' EXIT
 
-for i in $(seq 1 60); do
+# 等待上限 5 分钟，不是 2 分钟。
+#
+# 本地 ~/.m2 是满的，应用十几秒就起来，所以 2 分钟看起来绰绰有余。
+# 但在一个干净的 CI runner 上，spring-boot:run 可能还要现下插件 ——
+# 那时 2 分钟等到的不是"应用坏了"，而是"还没下完"，
+# 而这两种情况在日志里长得一模一样（都是健康检查一直失败）。
+# 把上限放宽到远大于任何合理的冷启动时间，失败就真的是失败了。
+for i in $(seq 1 150); do
   if curl -s -f "${BASE}/actuator/health" > /dev/null 2>&1; then
     echo "app ready after ${i} checks"
     break

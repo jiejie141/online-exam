@@ -108,6 +108,20 @@ jobs:
       - name: 装 Python 依赖（e2e_check.py 只用标准库，这步是保险）
         run: python -m pip install --upgrade pip
 
+      # 先把依赖和解压好的插件预热一遍。
+      #
+      # 为什么需要：e2e.sh 里等应用启动只给 120 秒（60 次 x 2 秒），
+      # 本地这个时间绰绰有余，因为 ~/.m2 早就满了。CI 上是从零开始，
+      # 而 spring-boot:run 要走 spring-boot-maven-plugin 那条路径，
+      # 它需要的插件和依赖跟 `mvn test` 不是同一套 ——
+      # 上面 unit job 下的是 test 那一套，缓存按 pom.xml 哈希共享，
+      # 但覆盖不到 run 需要的全部东西。
+      #
+      # 这一步不改变 e2e.sh 的行为，只是让它不必把时间花在下载上。
+      # 失败不影响后续（真下不动的话，e2e.sh 自己会报出来）。
+      - name: 预热 Maven 依赖（让 e2e.sh 的 120 秒等待留给启动，而不是下载）
+        run: mvn -B -q dependency:go-offline || true
+
       # e2e.sh 自己会 docker compose up -d 并等 MySQL 就绪，
       # 所以这里不重复声明 services —— 保持「本地怎么跑，CI 就怎么跑」。
       - name: 跑端到端（含判分延迟实测）
@@ -149,13 +163,20 @@ jobs:
             echo "::notice::$line"
           done < <(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null)
           # 应用起不来时，答案在那份日志尾部（e2e.sh 会 tail -40）。
-          # 上面那条 grep 只认 '== ' 和 '!!' 开头，正好漏掉真正有用的部分。
-          # 这里把『!! 服务没起来』之后的内容整段推出来。
-          if grep -q '服务没起来' target/e2e-run.log 2>/dev/null; then
-            n=$(grep -n '服务没起来' target/e2e-run.log | head -1 | cut -d: -f1)
-            tail -n +"$n" target/e2e-run.log | head -45 | while IFS= read -r line; do
+          # 上面那条 grep 只认 '== ' 和 '!!' 开头，恰好漏掉真正有用的部分。
+          #
+          # 这里不用 grep -q + 行号定位：上一版那么写，结果什么都没推出来，
+          # 而『什么都没推出来』和『日志本来就是空的』在外部看起来一样。
+          # 直接用 sed 截取，并且**无论有没有内容都推一条说明**，
+          # 免得又回到「分不清是没内容还是没执行」。
+          if [ -s target/e2e-run.log ]; then
+            echo "::notice::最后 40 行日志开始"
+            tail -40 target/e2e-run.log | while IFS= read -r line; do
               echo "::notice::$line"
             done
+            echo "::notice::最后 40 行日志结束"
+          else
+            echo "::notice::e2e-run.log 是空的，e2e.sh 没产生任何输出"
           fi
           exit $rc
 
