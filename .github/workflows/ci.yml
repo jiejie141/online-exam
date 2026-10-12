@@ -148,6 +148,15 @@ jobs:
           while IFS= read -r line; do
             echo "::notice::$line"
           done < <(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null)
+          # 应用起不来时，答案在那份日志尾部（e2e.sh 会 tail -40）。
+          # 上面那条 grep 只认 '== ' 和 '!!' 开头，正好漏掉真正有用的部分。
+          # 这里把『!! 服务没起来』之后的内容整段推出来。
+          if grep -q '服务没起来' target/e2e-run.log 2>/dev/null; then
+            n=$(grep -n '服务没起来' target/e2e-run.log | head -1 | cut -d: -f1)
+            tail -n +"$n" target/e2e-run.log | head -45 | while IFS= read -r line; do
+              echo "::notice::$line"
+            done
+          fi
           exit $rc
 
       - name: 服务日志（失败时才有用）
