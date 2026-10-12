@@ -114,25 +114,31 @@ jobs:
         run: |
           # 把每一步都发成 annotation 的 notice。
           # 理由：这个 job 失败时，匿名能拿到的只有 annotation 和
-          # "exit code 1" 这一行；job 日志正文要认证才下得动。
-          # 所以「挂在哪一步」这个信息必须主动推出来，不能指望有人去翻网页。
-          # 用 tee 而不是重定向：默认输出照常（网页上看得到），
-          # 同时落一份文件，跑完不管成败都吐进度。
-          set -o pipefail
-          bash scripts/e2e.sh 2>&1 | tee target/e2e-run.log
-          rc=${PIPESTATUS[0]}
+          # exit code 1 这一行；job 日志正文要认证才下得动。
+          # 所以「挂在哪一步」必须主动推出来，不能指望有人去翻网页。
+          #
+          # 两个坑，都实际踩到了：
+          #
+          # 1. GitHub 的 run 默认带 -e。管道那行返回非 0 时，脚本立刻退出，
+          #    后面的 PIPESTATUS 和 echo notice 全都不执行 ——
+          #    表现是失败时一条 notice 都没有，看起来像这段根本不存在。
+          #    改成重定向到文件 + 手动记 rc，就不用管道了。
+          #
+          # 2. 不用 | while 发 notice：while 跑在子 shell 里，rc 传不回来。
+          #    用 for + 命令替换。
+          set +e
+          bash scripts/e2e.sh > target/e2e-run.log 2>&1
+          rc=$?
+          cat target/e2e-run.log
           echo "::notice::e2e.sh 退出码 = $rc"
-          grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null \
-            | while IFS= read -r line; do echo "::notice::$line"; done
+          # while read + 进程替换：grep 的整行（含空格）交给 while，
+          # 不用 for $(...)：那样会按空格拆词，一条 '== 1/6 起依赖 =='
+          # 会被拆成四条 notice。
+          while IFS= read -r line; do
+            echo "::notice::$line"
+          done < <(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null)
           exit $rc
 
-      # 失败时把关键输出**同时**发成 annotation。
-      #
-      # 为什么不能只 echo：这个仓库是公开的，但 job 日志的下载接口
-      # 对匿名请求返回 403（需要认证）。也就是说 —— 手边没有 gh CLI、
-      # 没登录的情况下，日志正文是拿不到的，只能看到「exit code 1」。
-      # annotation 是匿名可读的，把失败摘要塞进去，
-      # 排查的人（包括未来的我）不看网页也能知道挂在哪。
       - name: 服务日志（失败时才有用）
         if: failure()
         run: |
