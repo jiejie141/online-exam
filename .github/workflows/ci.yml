@@ -2,7 +2,7 @@
 # CI：每次 push / PR 自动验证
 #
 # 分三个 job，故意拆开 —— 失败时能一眼看出是哪一类问题：
-#   unit  : mvn test（126 条单元测试，纯内存，不依赖任何中间件）
+#   unit  : mvn test（144 条单元测试，纯内存，不依赖任何中间件）
 #   e2e   : 起真 MySQL / Redis / RabbitMQ，跑 scripts/e2e.sh 与 e2e_check.py
 #   docker: 镜像能不能构建出来
 #
@@ -62,7 +62,7 @@ jobs:
         run: mvn -B -q dependency:list -DincludeScope=test -DoutputFile=/tmp/deps.txt && head -40 /tmp/deps.txt || true
 
       - name: mvn test
-        # 这 126 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
+        # 这 144 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
         # 因此严格来说不需要密钥。显式给一个是为了：
         #   1. 万一以后有人加了 @SpringBootTest，不会因为「CI 环境没设变量」而红；
         #   2. 让「密钥从哪来」在 workflow 里是可见的，而不是隐含的。
@@ -224,7 +224,13 @@ jobs:
   docker:
     name: 镜像构建
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 分钟不够。正常情况下这个 job 只要 1 分多钟（#19 是 1m16s），
+    # 但它要现拉 node:20-alpine 和 maven:3.9-eclipse-temurin-17 两个基础镜像、
+    # 再跑 npm ci 和 dependency:go-offline —— 全是外网下载。
+    # #20 就卡在这一步被 20 分钟硬砍，整条 workflow 变成 CANCELLED，
+    # 而同时段单测和端到端都过了：看起来像 docker 坏了，实际是网络在排队。
+    # 放宽到 30 分钟，让「真慢」和「真坏」能分开。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
