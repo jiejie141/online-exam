@@ -1,11 +1,17 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/utils/feedback'
 import { listExams, createExam, publishExam, closeExam, listQuestions, addQuestionsToExam } from '@/api'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const router = useRouter();
-const loading = ref(false);
+const loading = ref(true);
+// 列表请求失败和「一场考试都没有」看起来一模一样，但该做的事相反：
+// 一个是刷新，一个是去新建。所以它们必须是两个分支。
+const loadError = ref('');
 const exams = ref([]);
 const questions = ref([]);
 
@@ -42,10 +48,11 @@ const statusType = { draft: 'info', published: 'success', closed: 'warning' };
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     exams.value = await listExams();
   } catch (e) {
-    ElMessage.error(e.message);
+    loadError.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -195,8 +202,17 @@ onMounted(load);
     </div>
 
     <el-card shadow="never">
-      <div v-loading="loading">
-        <el-table v-if="exams.length" :data="exams" stripe>
+      <div>
+        <SkeletonBlock v-if="loading" :rows="5" dense />
+
+        <ErrorState
+          v-else-if="loadError"
+          title="考试列表加载失败"
+          :message="loadError"
+          @retry="load"
+        />
+
+        <el-table v-else-if="exams.length" :data="exams" stripe>
           <el-table-column prop="id" label="ID" width="70" />
           <el-table-column prop="title" label="考试名称" min-width="180" />
           <el-table-column prop="subject" label="科目" width="100" />
@@ -239,9 +255,7 @@ onMounted(load);
           </el-table-column>
         </el-table>
 
-        <div v-else-if="!loading" class="empty-tip">
-          还没有考试。点「新建考试」开始。
-        </div>
+        <EmptyState v-else text="还没有考试。" hint="点上面的「新建考试」开始：建考试 → 组卷 → 发布。" />
       </div>
     </el-card>
 

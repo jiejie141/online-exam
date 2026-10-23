@@ -1,14 +1,20 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { getStats, getDistribution, getAccuracy, getProgress, listExams } from '@/api'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const route = useRoute();
 const router = useRouter();
 const examId = Number(route.params.examId);
 
 const loading = ref(true);
+// 统计页有五个请求，任意一个失败就整页没数据。旧版只弹一下 toast，
+// 于是页面上留着五张写着「—」的卡片 —— 看起来像「这门考试没人考」，
+// 实际是「请求失败了」。这两种情况的处理动作完全不同（刷新 vs 等学生）。
+const loadError = ref('');
 const stats = ref(null);
 const distribution = ref([]);
 const accuracy = ref([]);
@@ -49,6 +55,7 @@ const avgText = computed(() => {
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     const [s, d, a, p, exams] = await Promise.all([
       getStats(examId),
@@ -64,7 +71,7 @@ async function load() {
     const found = (exams || []).find((e) => e.id === examId);
     examTitle.value = found ? found.title : `考试 #${examId}`;
   } catch (e) {
-    ElMessage.error(e.message);
+    loadError.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -74,7 +81,7 @@ onMounted(load);
 </script>
 
 <template>
-  <div v-loading="loading">
+  <div>
     <div class="toolbar">
       <div>
         <h2 class="page-title" style="margin: 0">成绩统计</h2>
@@ -85,65 +92,82 @@ onMounted(load);
       <el-button @click="router.replace({ name: 'teacher-exams' })">返回</el-button>
     </div>
 
-    <!-- 概览：四张卡片。total 为 0 时明确写「还没有成绩」，
-         而不是显示 0 分平均分 —— 那是假数据 -->
-    <div class="cards">
-      <div class="card">
-        <div class="card-label">已判分人数</div>
-        <div class="card-value">{{ stats ? stats.total : '—' }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">平均分</div>
-        <div class="card-value">{{ avgText }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">最高 / 最低</div>
-        <div class="card-value">
-          <template v-if="stats && stats.total">{{ stats.maxScore }} / {{ stats.minScore }}</template>
-          <template v-else>—</template>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-label">及格人数</div>
-        <div class="card-value">{{ stats ? stats.passCount : '—' }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">已交 / 进行中</div>
-        <div class="card-value">
-          <template v-if="progress">{{ progress.submitted }} / {{ progress.ongoing }}</template>
-          <template v-else>—</template>
-        </div>
-      </div>
-    </div>
+    <SkeletonBlock v-if="loading" :rows="9" />
 
-    <div class="panel">
-      <div class="panel-title">成绩分布</div>
-      <div v-if="distribution.length" class="chart">
-        <div v-for="d in distribution" :key="d.bucket" class="bar-wrap">
-          <div class="bar-cnt">{{ d.cnt }}</div>
-          <div class="bar" :style="{ height: barHeight(d) }"></div>
-          <div class="bar-label">{{ d.bucket }}~{{ d.bucket + 9 }}</div>
+    <ErrorState
+      v-else-if="loadError"
+      title="统计数据加载失败"
+      :message="loadError"
+      @retry="load"
+    />
+
+    <template v-else>
+      <!-- 概览：五张卡片。total 为 0 时明确写「还没有成绩」，
+           而不是显示 0 分平均分 —— 那是假数据 -->
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">已判分人数</div>
+          <div class="card-value">{{ stats ? stats.total : '—' }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">平均分</div>
+          <div class="card-value">{{ avgText }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">最高 / 最低</div>
+          <div class="card-value">
+            <template v-if="stats && stats.total">{{ stats.maxScore }} / {{ stats.minScore }}</template>
+            <template v-else>—</template>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">及格人数</div>
+          <div class="card-value">{{ stats ? stats.passCount : '—' }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">已交 / 进行中</div>
+          <div class="card-value">
+            <template v-if="progress">{{ progress.submitted }} / {{ progress.ongoing }}</template>
+            <template v-else>—</template>
+          </div>
         </div>
       </div>
-      <div v-else class="empty-tip">还没有已判分的答卷。</div>
-    </div>
 
-    <div class="panel">
-      <div class="panel-title">逐题正确率</div>
-      <p class="panel-desc">按正确率升序排列 —— 排在最前面的就是全班错得最多的题，讲评时先看它。</p>
-      <el-table v-if="accuracy.length" :data="accuracy" stripe size="small">
-        <el-table-column prop="questionId" label="题号" width="80" />
-        <el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip />
-        <el-table-column prop="attempt" label="作答人数" width="100" />
-        <el-table-column prop="correctCount" label="答对人数" width="100" />
-        <el-table-column label="正确率" width="100">
-          <template #default="{ row }">
-            <span :class="rateClass(row)">{{ rateText(row) }}</span>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div v-else class="empty-tip">还没有判分数据。</div>
-    </div>
+      <div class="panel">
+        <div class="panel-title">成绩分布</div>
+        <div v-if="distribution.length" class="chart">
+          <div v-for="d in distribution" :key="d.bucket" class="bar-wrap">
+            <div class="bar-cnt">{{ d.cnt }}</div>
+            <div class="bar" :style="{ height: barHeight(d) }"></div>
+            <div class="bar-label">{{ d.bucket }}~{{ d.bucket + 9 }}</div>
+          </div>
+        </div>
+        <!-- 「还没有已判分的答卷」是结果为空，不是加载失败 —— 这两种界面
+             在上面已经分开了，这里只负责「真的没人考」。 -->
+        <EmptyState
+          v-else
+          text="还没有已判分的答卷。"
+          hint="学生交卷后判分是异步完成的，等一会儿点上面的刷新。"
+        />
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">逐题正确率</div>
+        <p class="panel-desc">按正确率升序排列 —— 排在最前面的就是全班错得最多的题，讲评时先看它。</p>
+        <el-table v-if="accuracy.length" :data="accuracy" stripe size="small">
+          <el-table-column prop="questionId" label="题号" width="80" />
+          <el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip />
+          <el-table-column prop="attempt" label="作答人数" width="100" />
+          <el-table-column prop="correctCount" label="答对人数" width="100" />
+          <el-table-column label="正确率" width="100">
+            <template #default="{ row }">
+              <span :class="rateClass(row)">{{ rateText(row) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <EmptyState v-else text="还没有判分数据。" />
+      </div>
+    </template>
   </div>
 </template>
 

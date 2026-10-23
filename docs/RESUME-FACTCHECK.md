@@ -13,7 +13,7 @@
 >
 > | 本文原结论 | 实际情况 |
 > |---|---|
-> | §3.1「**这个项目没有 CI**，连 `.github` 目录都不存在」 | ❌ **已有 CI**：`.github/workflows/ci.yml`，3 个 job（单元 / 真 MySQL·Redis·RabbitMQ 端到端 / 镜像构建） |
+> | §3.1「**这个项目没有 CI**，连 `.github` 目录都不存在」 | ❌ **已有 CI**：`.github/workflows/ci.yml`，4 个 job（后端单测 / 前端 vitest + 构建 / 真 MySQL·Redis·RabbitMQ 端到端 / 镜像构建） |
 > | §二「端到端脚本需要 Docker，**没进 CI**」 | ❌ **已进 CI**：`e2e` job 每次 push 都跑 `scripts/e2e.sh` |
 >
 > 触发点：`9ee77b5`（10-10）加了 CI，`0743525` 引入 Flyway 迁移。

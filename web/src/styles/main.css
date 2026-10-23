@@ -142,10 +142,75 @@ body {
   flex: 1;
 }
 
-/* 表格里的空状态 */
-.empty-tip {
-  padding: 32px 0;
-  text-align: center;
-  color: #909399;
-  font-size: 14px;
+/* 交卷确认框里的未答题号清单。
+   ElMessageBox 的内容挂在 body 上，不是本组件的子节点，
+   所以这段样式只能写在全局（scoped 到不了那里）。 */
+.submit-confirm .mb-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.submit-confirm .mb-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #fdf6ec;
+  color: #b88230;
+  font-weight: 600;
+}
+
+/* ---------------- 窄屏 ---------------- */
+/* 断点定在 900px：再窄一点顶栏的三块（品牌 / 导航 / 用户）
+   就挤成一团了。移动端不追求把桌面版原样塞进去，
+   只要求「能看、能点、不横向滚动」。 */
+@media (max-width: 900px) {
+  .header-inner {
+    height: auto;
+    padding: 10px 16px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .nav {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+  }
+
+  .nav-link {
+    white-space: nowrap;
+  }
+
+  .user-area {
+    margin-left: auto;
+    font-size: 13px;
+  }
+
+  .user-name {
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-main {
+    padding: 16px;
+  }
+
+  .page-title {
+    font-size: 18px;
+  }
+
+  /* 表格在窄屏下不换行会撑出横向滚动条，横向滚动又把整页拖歪。
+     让工具栏里的固定宽度控件先学会收缩。 */
+  .toolbar > .el-input,
+  .toolbar > .el-select {
+    width: 100% !important;
+  }
 }

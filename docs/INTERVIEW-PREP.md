@@ -122,15 +122,20 @@ WebFlux 的事件循环模型下用不了。这是选型理由，不是“跟风
 
 ## 二、这次补的工程设施（新增，要会讲）
 
-### 2.1 CI：三个 job 为什么拆开
+### 2.1 CI：四个 job 为什么拆开
 
 **这是你回答“你怎么保证质量”的核心。**
 
 | job | 做什么 | 为什么单独拆 |
 |---|---|---|
 | unit | mvn test，Java 17 + 21 | 纯 Mockito 打桩，不依赖中间件 |
+| frontend | Vitest 40 条 + 真构建一次 | **页面上的逻辑有没有错**，与 JDK 版本无关 |
 | e2e | 起真 MySQL/Redis/RabbitMQ 跑 e2e.sh | **SQL 到底对不对** |
-| docker | 构建镜像 + 验 fail-closed | 容器里是否也成立 |
+| docker | 构建镜像 + 验 fail-closed + 验 jar 里有前端产物 | 容器里是否也成立 |
+
+**为什么 frontend 不并进 unit**：unit 跑的是 Java 17 / 21 的 matrix，前端不关心 JDK，
+并进去等于同一份 Vitest 白跑两遍；而且失败信号会混在一起 —— 「组件报错」和
+「事务边界写错了」是两类完全不同的原因。**拆 job 的目的就是让红叉自己说出是哪一类。**
 
 **关键论点（一定要说）**：
 
@@ -602,9 +607,71 @@ SQL 里的列名和 Java 里的字段名之间没有任何编译期检查，
 中间只有 MyBatis 一条**会静默失败的**约定。
 能想到把这条约定写成测试，比多写十条断言更能说明问题。
 
+### 2.11 「按需引入」装了插件却没摇掉：一次 41% 的体积优化
+
+**背景**：前端主 chunk 1.11 MB（gzip 370 KB），构建时有一条 `chunks are larger
+than 500 kB` 警告。这个页面只用了 17 个 Element Plus 组件，1.11 MB 显然不合理。
+
+**第一版做法（照文档抄的，没效果）**：装 `unplugin-vue-components` +
+`unplugin-auto-import`，在 vite 里配 `ElementPlusResolver()`。
+重新构建 —— **体积几乎没动**。
+
+**为什么没动**：去看 `unplugin-vue-components/dist/resolvers.js`，当 element-plus
+版本 >= 1.1.0-beta.1 时，`resolveComponent` 返回的是
+
+```js
+{ name, from: 'element-plus/es', sideEffects: ['element-plus/es/components/base/style/css', ...] }
+```
+
+而 `element-plus/es/index.mjs` 是一个 **barrel**（再导出汇总文件），它第 293 行
+`import defaults_default from "./defaults.mjs"`，`defaults.mjs` 里
+`makeInstaller([...component_default, ...plugin_default])` —— **把所有组件都 import 了一遍**。
+打包器无法证明这个模块无副作用，于是**一个组件都摇不掉**。
+
+> 装了插件 ≠ 摇掉了。**「按需引入」这四个字最会骗人的地方就在这里：
+> 配置看起来完全正确，构建也成功，警告也还在。**
+
+**改法**：自己写 resolver，直接指向深路径。难点是**组件名不能靠 kebab-case 猜目录**：
+
+| 导出名 | kebab-case 猜的目录 | 真实位置 |
+|---|---|---|
+| `ElTableColumn` | `table-column/` ❌ | 在 `table/index.mjs` 里一起导出 |
+| `ElFormItem` | `form-item/` ❌ | 在 `form/` 里 |
+| `ElOption` | `option/` ❌ | 在 `select/` 里 |
+| `ElCheckboxGroup` | `checkbox-group/` ❌ | 在 `checkbox/` 里 |
+
+所以做法是**扫一遍 `es/components/*/index.mjs`，把每个文件 `export { ... }` 里的
+`El[A-Z]*` 名字建成一张 `Map<组件导出名, 目录名>`**，运行时查表。查不到就不接管，
+让 Vue 自己报「未注册组件」而不是静默降级。
+
+**结果（实测）**：
+
+| | 前 | 后 |
+|---|---|---|
+| JS 总计 | 1,113,341 B | **657,727 B（降 41%）** |
+| 主 chunk gzip | 370 KB | **230 KB** |
+| CSS 总计 | 362,823 B | **148,393 B** |
+| 模块数 | 1737 | 1159 |
+| 500 kB 警告 | 有 | 无 |
+
+复查新产物：`ElTransfer` / `ElCascader` / `ElCarousel` / `ElUpload` / `ElTableV2` /
+`ElColorPicker` / `ElTimeline` 全部 **0 命中**；只有 `ElTree` 剩 3 处、
+`ElTreeSelect` 剩 1 处 —— 那是 `select` 的依赖链带进来的，砍不掉也不该砍。
+
+**这段为什么值得讲**：它同时展示了三件事 ——
+① 会读依赖包的源码，而不是只信文档；
+② 用「产物里 grep 组件名」这种方式**验证优化真的生效**（而不是看到构建成功就宣布成功）；
+③ 分得清「配置写对了」和「效果发生了」。
+
+> 面试版一句话：「按需引入配了插件但体积没变，因为我查了源码发现官方 resolver
+> 在 2.x 上指向的是 barrel 文件，tree-shaking 从一开始就不可能生效。改成手写
+> 深路径映射表之后，JS 从 1.11 MB 降到 657 KB，我是在产物里 grep 过组件名确认的。」
+
+---
+
 ## 三、已知限制（必须主动说，别等被问）
 
-README 第八节列了 10 条，**挑这几条主动说**，能证明你分得清“做完”和“没做”：
+README 第八节列了 12 条，**挑这几条主动说**，能证明你分得清“做完”和“没做”：
 
 1. **判分失败不会自动重试**：消费者吞异常只记日志，靠 score 为 NULL 的记录数
    发现漏判。要做对需要死信队列 + 重试计数。
@@ -614,6 +681,8 @@ README 第八节列了 10 条，**挑这几条主动说**，能证明你分得�
 5. **Dockerfile 没在真实镜像上构建过**（本机 Docker 代理失效拉不到镜像），
    只做到指令结构已校验；CI 的 docker job 会在能联网的 runner 上真跑。
 6. **压测客户端和服务在同一台机器**，QPS 是保守值。
+7. **前端只有单测，没有端到端**：Vitest 40 条钉住倒计时、多选拼接、401 跳转、
+   交卷弹窗和三态，但没有 Playwright，所以「后端改坏了前端照样绿」抓不到。
 
 ---
 
@@ -621,7 +690,9 @@ README 第八节列了 10 条，**挑这几条主动说**，能证明你分得�
 
 | 说法 | 准确表述 | 备注 |
 |---|---|---|
-| 单测 | **144 条**，17 个测试类 | 全部通过，不依赖外部中间件 |
+| 后端单测 | **144 条**，17 个测试类 | 全部通过，不依赖外部中间件 |
+| 前端单测 | **40 条**，3 个文件 | Vitest；纯逻辑 + 组件行为，不是快照 |
+| 前端体积 | JS **657 KB**（gzip 230 KB），CSS 148 KB | 原来是 1.11 MB / gzip 370 KB |
 | 判分用例 | **13 个**，钉住纯函数 | 不是“13 条规则” |
 | 压测规模 | **50 名学生**各交一份 10 题卷 | 不是“50 条规则” |
 | 端到端校验 | **32 条** check | 连真 MySQL，需 Docker |
@@ -629,7 +700,7 @@ README 第八节列了 10 条，**挑这几条主动说**，能证明你分得�
 | 交卷→出分 | avg 28 ms，p99 48 ms | 异步 MQ |
 | 取卷 QPS | 缓存 4773 / 降级 723 | 100 并发 × 10 秒，两轮 |
 | 表 | 6 张 | 不是“6 个迁移脚本” |
-| CI | 3 个 job（unit / e2e / docker） | 不是“四类作业” |
+| CI | 4 个 job（unit / frontend / e2e / docker） | 不是“四类作业” |
 
 **⚠️ 千万别再说的（简历里已经纠正过）**：
 
@@ -649,8 +720,8 @@ README 第八节列了 10 条，**挑这几条主动说**，能证明你分得�
 | | lab-booking-agent | online-exam |
 |---|---|---|
 | 语言 | Python / FastAPI | Java / Spring Boot |
-| CI | 5 个 job（含真 PostgreSQL） | 3 个 job |
-| 测试 | 1026 项（1010 通过 / 16 跳过） | 144 条全通过 |
+| CI | 6 个 job（含真 PostgreSQL、真 chromadb） | 4 个 job |
+| 测试 | 1026 项（1010 通过 / 16 跳过） | 144 条后端 + 40 条前端 |
 | 迁移 | 7 个（Alembic） | 2 个（Flyway V1/V2） |
 | 并发测试 | 40 并发 × 3 轮 | 100 并发 × 10 秒 A/B |
 

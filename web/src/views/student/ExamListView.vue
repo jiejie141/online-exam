@@ -1,20 +1,27 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { listAvailableExams, startExam } from '@/api'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const router = useRouter();
-const loading = ref(false);
+const loading = ref(true);
 const exams = ref([]);
 const startingId = ref(null);
+// 三个状态分开存，不合并成「一个 loading 管所有」：
+// 请求中 / 请求失败 / 请求成功但结果为空，是三种完全不同的界面，
+// 混在一起就会在失败时显示「暂无数据」—— 把错误伪装成正常结果。
+const error = ref('');
 
 async function load() {
   loading.value = true;
+  error.value = '';
   try {
     exams.value = await listAvailableExams();
   } catch (e) {
-    ElMessage.error(e.message);
+    error.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -36,7 +43,7 @@ async function onStart(exam) {
       router.push({ name: 'exam-result', params: { recordId: result.recordId } });
     }
   } catch (e) {
-    ElMessage.error(e.message);
+    error.value = e.message;
   } finally {
     startingId.value = null;
   }
@@ -59,40 +66,50 @@ onMounted(load);
     <p class="page-desc">这里只显示当前时间窗内可以参加的考试。</p>
 
     <el-card shadow="never">
-      <div v-loading="loading">
-        <el-table v-if="exams.length" :data="exams" stripe>
-          <el-table-column prop="title" label="考试名称" min-width="200" />
-          <el-table-column prop="subject" label="科目" width="120" />
-          <el-table-column label="开始时间" width="160">
-            <template #default="{ row }">{{ fmtTime(row.startAt) }}</template>
-          </el-table-column>
-          <el-table-column label="结束时间" width="160">
-            <template #default="{ row }">{{ fmtTime(row.endAt) }}</template>
-          </el-table-column>
-          <el-table-column label="时长" width="90">
-            <template #default="{ row }">{{ row.durationMinutes }} 分钟</template>
-          </el-table-column>
-          <el-table-column label="总分" width="80">
-            <template #default="{ row }">{{ row.totalScore }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="120" fixed="right">
-            <template #default="{ row }">
-              <el-button
-                type="primary"
-                size="small"
-                :loading="startingId === row.id"
-                @click="onStart(row)"
-              >
-                进入考试
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+      <!-- 三选一：还在加载 / 加载失败 / 有数据或确实没有 -->
+      <SkeletonBlock v-if="loading" :rows="4" />
 
-        <div v-else-if="!loading" class="empty-tip">
-          当前没有可以参加的考试。
-        </div>
-      </div>
+      <ErrorState
+        v-else-if="error"
+        title="考试列表加载失败"
+        :message="error"
+        @retry="load"
+      />
+
+      <el-table v-else-if="exams.length" :data="exams" stripe>
+        <el-table-column prop="title" label="考试名称" min-width="200" />
+        <el-table-column prop="subject" label="科目" width="120" />
+        <el-table-column label="开始时间" width="160">
+          <template #default="{ row }">{{ fmtTime(row.startAt) }}</template>
+        </el-table-column>
+        <el-table-column label="结束时间" width="160">
+          <template #default="{ row }">{{ fmtTime(row.endAt) }}</template>
+        </el-table-column>
+        <el-table-column label="时长" width="90">
+          <template #default="{ row }">{{ row.durationMinutes }} 分钟</template>
+        </el-table-column>
+        <el-table-column label="总分" width="80">
+          <template #default="{ row }">{{ row.totalScore }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="startingId === row.id"
+              @click="onStart(row)"
+            >
+              进入考试
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <EmptyState
+        v-else
+        text="当前没有可以参加的考试。"
+        hint="考试开放时间到了才会出现在这里，刷新一下再看看。"
+      />
     </el-card>
   </div>
 </template>

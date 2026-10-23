@@ -5,7 +5,8 @@
 一个能真的从头考到尾的考试系统：老师出题组卷发布，学生在时间窗内进入考试、答题、交卷，
 系统自动判分并给出成绩分布和逐题正确率。
 
-CI 上三个 job 都跑真东西：单元测试在 Java 17 / 21 双版本上跑，
+CI 上四个 job 都跑真东西：单元测试在 Java 17 / 21 双版本上跑，
+前端 job 跑 Vitest（倒计时、多选答案拼接、401 跳转这些都在 JS 里）并真构建一次，
 e2e job 连真 MySQL / Redis / RabbitMQ 跑完整流程（含判分延迟实测），
 docker job 真的构建镜像，验证「缺密钥就拒绝启动」，并且把 jar 从镜像里抠出来
 确认前端页面确实被打进去了（前端产物不进 git，是 Dockerfile 里现构建的，
@@ -28,7 +29,7 @@ docker job 真的构建镜像，验证「缺密钥就拒绝启动」，并且把
 | 层 | 选型 | 为什么 |
 |---|---|---|
 | Web | Spring Boot 3.3.4 + **Spring MVC** | 交卷+判分要整体成功或整体失败，必须用 `@Transactional` 和 ThreadLocal，WebFlux 的事件循环模型下用不了 |
-| 前端 | Vue 3 + Vite + Element Plus + Pinia + Vue Router | 前后端分离，但**构建产物由后端一起托管**，所以部署仍然只有一个进程、没有 CORS |
+| 前端 | Vue 3 + Vite + Element Plus（按需引入）+ Pinia + Vue Router + Vitest | 前后端分离，但**构建产物由后端一起托管**，所以部署仍然只有一个进程、没有 CORS |
 | ORM | MyBatis-Plus 3.5.7 | 统计查询要写 JOIN + CASE + 分组，注解式 SQL 比 XML 更容易和 Java 代码一起 review |
 | 数据库 | MySQL 8 | 用到了 JSON 列、`INSERT ... AS new ON DUPLICATE KEY UPDATE` |
 | 缓存 | Caffeine（L1）+ Redis（L2，Lettuce） | 两级卷面缓存，含穿透/击穿/雪崩三件事的处理 |
@@ -100,6 +101,7 @@ bash scripts/bench.sh        # 取卷吞吐 A/B 压测
 ```bash
 cd web
 npm ci            # 严格按 package-lock.json 装，版本与 CI 一致
+npm test          # Vitest：40 条前端单测
 npm run build     # 产物写到 ../src/main/resources/static/
 ```
 
@@ -339,6 +341,22 @@ mvn test
 | `ExamServiceTest` | 8 | 别人不能往他人卷子里加题/发布/结束（且一行都没写进去）、总分按卷面累加、及格线高于总分拒绝发布、空卷拒绝发布、题目必须有出题老师 |
 | `StatsServiceTest` | 6 | 四个统计接口都过归属校验、没人判分时补 0 而不是空指针（avg/max/min 保持 null）、交卷进度把 graded 也算作已交 |
 
+### 前端单测
+
+```bash
+cd web && npm test      # vitest run，40 条
+```
+
+| 文件 | 条数 | 覆盖 |
+|---|---|---|
+| `src/utils/exam.test.js` | 18 | 倒计时三个坑（字段构造本地时间、毫秒尾巴、负数钳到 00:00）、选项 JSON 坏了返空数组而不是白屏、多选答案 `DAC == ACD`、空串拆出 `[]` 而不是 `['']` |
+| `src/views/student/ExamTakingView.test.js` | 12 | 答题卡三色与点击跳转、标记不影响作答、交卷弹窗列出未答题号、加载失败停在答题页而不把人送回列表、点重试真的重发、多选先排序再提交、每答一题立刻落库 |
+| `src/api/http.test.js` | 10 | 拆 `ApiResponse` 壳、code 非 0 不混进成功分支、401 先清会话再带 `redirect` 回跳、登录页上不重复 push、超时给中文文案、有 token 才带 `Bearer` |
+
+这几条都是**会让页面出错的逻辑**，不是「渲染出来了就算过」的快照测试。写完做过变异验证：
+把 `sort().join('')` 改成 `join('')`、把答题卡格子清空、把错误态改回 `ElMessage` 弹一下 ——
+对应的 6 条用例立刻变红，说明它们真的在盯行为而不是在盯常量。
+
 ## 八、已知限制（没做的，不装作做了）
 
 1. **SQL 的`执行`不在 `mvn test` 里验证，但 SQL 的`列名`验证了。** SQL 用了 MySQL 专有语法
@@ -389,13 +407,18 @@ mvn test
    **最后这条不是多余的**：前端产物不进 git，镜像里那份是 Dockerfile 的 node 阶段
    现构建再 COPY 的，这一环断了的话镜像照样构建成功、容器照样起、健康检查照样绿，
    只是打开是 404 —— 没有任何一条断言会碰到它。
-10. **前端没有自动化测试。** 没有 Vitest 单测、没有 Playwright 端到端，
-    页面是手动点过的。后端接口有 144 条单测 + e2e 脚本兜着，
-    但"页面上那个按钮点了会不会报错"目前只靠人看。
-11. **前端没做按需引入。** Element Plus 是整包引入的，主 chunk 1.1 MB（gzip 370 KB），
-    构建时有一条 `chunks are larger than 500 kB` 警告。做按需引入能砍掉大半，
-    但那是 `unplugin-vue-components` 加一堆配置的事，对现在的使用场景（内网、桌面浏览器）
-    不值得。**这条是取舍，不是遗漏。**
+10. **前端只有单测，没有端到端。** Vitest 40 条钉住的是纯逻辑与组件行为：
+    倒计时用字段构造而不是 `new Date(s)`（差 8 小时那个坑）、多选答案先排序再拼
+    （`DAC` 与 `ACD` 必须是同一个答案）、401 之后清 store 并带 `redirect` 回跳、
+    答题卡 / 交卷弹窗 / 加载失败三态。**没有 Playwright**，所以「后端改坏了但
+    前端单测仍然绿」这种情况抓不到 —— 接口契约靠后端 144 条单测与 e2e 脚本兜。
+11. **Element Plus 是深路径按需引入，不是官方 resolver。** 一开始按文档配
+    `unplugin-vue-components` 的 `ElementPlusResolver`，产物一点没瘦：它在
+    element-plus 2.x 上解析到的是 `element-plus/es` 这个 barrel，而 barrel 里的
+    `installer` 把所有组件都 import 了一遍，打包器无法证明无副作用，一个都摇不掉。
+    改成自写 resolver、直接指向 `element-plus/es/components/<dir>/index` 之后，
+    JS 从 1.11 MB 降到 657 KB（gzip 370 → 230 KB），那条 500 kB 警告才消失。
+    **这是「按需引入」这四个字最容易骗人的地方：装了插件不等于摇掉了。**
 12. **迁移 V1 是事后基线，不是从一开始就有的。** V1 的内容等于原来的
     `schema.sql`，所以从零建库、和按旧 schema.sql 建过的库，
     会走到不同的分支（一个真跑 V1，一个被 baseline 成 1）。两者最终结构一致，
@@ -437,11 +460,15 @@ scripts/
 ├── bench.sh                           取卷吞吐 A/B（Redis 开 / 停）
 └── bench_paper.py                     压测客户端（每线程长连接）
 
-web/                                   前端源码（Vue 3 + Vite）
-├── vite.config.js                     outDir 指向 ../src/main/resources/static
+web/                                   前端源码（Vue 3 + Vite，24 个源文件 + 6 个测试文件，共 30 个 .js/.vue/.css）
+├── vite.config.js                     outDir 指向 ../src/main/resources/static；
+│                                      自写 Element Plus 深路径 resolver + vitest 配置
 └── src/
     ├── api/http.js                    axios 实例 + 拦截器（拆壳、401 跳登录）
+    ├── api/http.test.js               拦截器单测（拆壳 / 401 / 超时文案 / Bearer）
+    ├── components/                    骨架屏 / 错误态 / 空状态三件套
     ├── router/index.js                hash 路由 + 登录/角色守卫
     ├── stores/auth.js                 token 存 sessionStorage
-    └── views/                         学生端 4 页 / 老师端 3 页
+    ├── utils/exam.js                  倒计时 / 选项 / 多选答案的纯函数（+ exam.test.js）
+    └── views/                         学生端 4 页 / 老师端 3 页（含答题卡与三态）
 ```

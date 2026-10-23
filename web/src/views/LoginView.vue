@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/utils/feedback'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore();

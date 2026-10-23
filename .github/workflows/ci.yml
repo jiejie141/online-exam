@@ -1,10 +1,15 @@
 # ===========================================================================
 # CI：每次 push / PR 自动验证
 #
-# 分三个 job，故意拆开 —— 失败时能一眼看出是哪一类问题：
-#   unit  : mvn test（144 条单元测试，纯内存，不依赖任何中间件）
-#   e2e   : 起真 MySQL / Redis / RabbitMQ，跑 scripts/e2e.sh 与 e2e_check.py
-#   docker: 镜像能不能构建出来
+# 分四个 job，故意拆开 —— 失败时能一眼看出是哪一类问题：
+#   unit    : mvn test（144 条单元测试，纯内存，不依赖任何中间件）
+#   frontend: 前端 vitest 单测 + vite 构建（Node，不装 JDK / 不连数据库）
+#   e2e     : 起真 MySQL / Redis / RabbitMQ，跑 scripts/e2e.sh 与 e2e_check.py
+#   docker  : 镜像能不能构建出来
+#
+# frontend 单独一个 job 的理由：它一条 Java 代码都不碰，塞进 unit 只会让
+# java 17/21 两个 matrix 各白跑一遍 npm；而它失败的原因（组件报错、
+# 构建产物路径不对）和 unit 失败的原因（SQL、事务、状态机）完全是两类。
 #
 # 为什么必须拆：这个项目的 SQL 用了 MySQL 专有语法（JSON 列、
 # INSERT ... AS new ON DUPLICATE KEY UPDATE），README 第七节写明了
@@ -36,6 +41,60 @@ permissions:
 # 需要它的 job（unit）在自己的 steps 里显式设置。
 
 jobs:
+  # ---------------------------------------------------------------------
+  # 前端单测 + 构建
+  #
+  # 为什么要有这个 job：后端 144 条单测全绿，不代表页面上那个按钮点下去
+  # 不会炸。倒计时、多选答案的拼接、401 之后往哪跳 —— 这些逻辑都在 JS 里，
+  # 之前只靠人点。
+  #
+  # 为什么不把它并进 unit：unit 跑的是 java 17 / 21 的 matrix，前端不关心
+  # JDK 版本，并进去等于同一份 vitest 白跑两遍；而且失败信号会混在一起。
+  # ---------------------------------------------------------------------
+  frontend:
+    name: 前端单测 + 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      # vitest 的输出在失败时会把每个用例的断言差异打出来，
+      # 所以这里不需要像 surefire 那样额外抬注解。
+      - name: 单元测试
+        run: npm test
+
+      # 测过还要能构建才算数：按需引入改的是打包行为，
+      # 测试跑的是源码模块，两者不是同一件事。
+      - name: 构建
+        run: npm run build
+
+      # 产物要落到后端的静态资源目录，否则镜像里是空的。
+      # outDir 是 ../src/main/resources/static（相对 web/）。
+      - name: 确认产物落到了后端要读的目录
+        run: |
+          set -e
+          test -f ../src/main/resources/static/index.html || {
+            echo '::error::构建产物没落到 src/main/resources/static —— outDir 配错了？'
+            exit 1
+          }
+          grep -q '/assets/' ../src/main/resources/static/index.html || {
+            echo '::error::index.html 里没有引用任何 /assets/ 资源'
+            exit 1
+          }
+          echo "::notice::构建产物 $(ls ../src/main/resources/static/assets | wc -l) 个文件"
+
   unit:
     name: 单元测试 (java ${{ matrix.java-version }})
     runs-on: ubuntu-latest

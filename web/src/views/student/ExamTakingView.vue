@@ -1,9 +1,20 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/utils/feedback'
 import { startExam, saveAnswer, submitExam } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import {
+  parseLocal,
+  formatRemaining,
+  choicesOf,
+  typeLabel,
+  joinMultiAnswer,
+  splitMultiAnswer
+} from '@/utils/exam'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const route = useRoute();
 const router = useRouter();
@@ -11,6 +22,7 @@ const auth = useAuthStore();
 
 const examId = Number(route.params.examId);
 const loading = ref(true);
+const loadError = ref('');
 const recordId = ref(null);
 const paper = ref([]);
 const deadlineAt = ref(null);
@@ -19,34 +31,15 @@ const submitting = ref(false);
 const answers = ref({});
 const savingIds = ref(new Set());
 const submitted = ref(false);
+// 标记（自己回头想再看一眼的题）。只活在本次答题里，不提交给后端 ——
+// 它是个纯粹的「阅读姿势」，不是答案的一部分，后端也没有这个字段。
+const marked = ref(new Set());
+// 刚跳转到的题，短暂高亮一下，否则点了题号屏幕滚动后用户找不到落点
+const flashId = ref(null);
 
 let tickTimer = null;
 let ws = null;
-
-// 把后端的 options（JSON 数组字符串）解析成数组。
-// 解析失败不能抛异常 —— 一道题的数据坏了不该让整张卷子白屏。
-function parseOptions(raw) {
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function typeLabel(t) {
-  return { single: '单选题', multiple: '多选题', judge: '判断题' }[t] || t;
-}
-
-// 判断题在数据库里 options 是 NULL，答案用 T/F。
-// 这里把它补成两个选项，让界面上和单选长得一样。
-function choicesOf(q) {
-  if (q.type === 'judge') {
-    return [{ key: 'T', text: '正确' }, { key: 'F', text: '错误' }];
-  }
-  return parseOptions(q.options);
-}
+let flashTimer = null;
 
 const answeredCount = computed(
   () => paper.value.filter((q) => {
@@ -57,27 +50,20 @@ const answeredCount = computed(
 
 const totalScore = computed(() => paper.value.reduce((s, q) => s + (q.score || 0), 0));
 
-// 时间显示。剩余秒数可能因为网络延迟略负，统一钳到 0。
-const remainText = computed(() => {
-  const s = Math.max(0, remaining.value);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
-});
+const remainText = computed(() => formatRemaining(remaining.value));
 
 const urgent = computed(() => remaining.value > 0 && remaining.value <= 300);
 
-function parseLocal(s) {
-  // 后端给的是不带时区的本地时间字符串（2026-10-23T09:00:00）。
-  // 直接 new Date(s) 在部分浏览器上会被当成 UTC 解析，导致差 8 小时。
-  // 显式拆字段构造，避免这个经典坑。
-  if (!s) return null;
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
-  if (!m) return new Date(s);
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
-}
+const isAnswered = (q) => {
+  const v = answers.value[q.id];
+  return v !== undefined && v !== null && String(v).length > 0;
+};
+
+// 未答题号（从 1 开始，给人看的）。交卷前用它拼提示，
+// 也用它算答题卡上的「还剩几题」。
+const unansweredNumbers = computed(
+  () => paper.value.map((q, i) => (isAnswered(q) ? 0 : i + 1)).filter(Boolean)
+);
 
 // 本地倒计时只是「显示」：每 30 秒从 deadlineAt 重算一次，而不是简单自减。
 // 简单自减在页面被切到后台时会被浏览器节流，回来就慢了一大截；
@@ -125,6 +111,7 @@ function connectWs() {
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     const result = await startExam(examId);
     recordId.value = result.recordId;
@@ -142,8 +129,10 @@ async function load() {
     tickTimer = setInterval(tick, 30000);
     connectWs();
   } catch (e) {
-    ElMessage.error(e.message);
-    router.replace({ name: 'student-exams' });
+    // 这里不再弹完就跳走：拿不到卷子是「这一页没加载成功」，
+    // 应该停在这一页并给一个重试按钮，而不是把人送回列表页、
+    // 让他自己去猜刚才发生了什么。
+    loadError.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -164,6 +153,32 @@ async function persist(q) {
   } finally {
     savingIds.value.delete(q.id);
   }
+}
+
+function onMultiChange(q, vals) {
+  // 排序后再拼：勾选顺序 D、A、C 和 A、C、D 是同一个答案集合，
+  // 但会生成两个不同的字符串。排序让同一个选择永远只有一种表示。
+  answers.value[q.id] = joinMultiAnswer(vals);
+  persist(q);
+}
+
+function toggleMark(q) {
+  if (marked.value.has(q.id)) {
+    marked.value.delete(q.id);
+  } else {
+    marked.value.add(q.id);
+  }
+}
+
+// 跳到第 idx 题（从 0 开始）。用 scrollIntoView 而不是自己算 offsetTop：
+// 顶部有一个 sticky 的时间条，手算会把题头盖住一部分。
+function jumpTo(idx) {
+  const el = document.getElementById(`q-${idx}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  flashId.value = idx;
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { flashId.value = null; }, 1200);
 }
 
 async function doSubmit(auto) {
@@ -192,16 +207,23 @@ async function doSubmit(auto) {
   }
 }
 
+// 交卷确认。旧版只有一句「还有 N 道题没有作答」，学生看到 N 之后
+// 只能自己一题一题翻回去找 —— 而这时卷子可能有两三千像素高。
+// 现在把未答题号直接列出来，并且在弹窗里点得动（点了就跳过去）。
 async function onSubmitClick() {
-  const unanswered = paper.value.length - answeredCount.value;
-  const tip = unanswered > 0
-    ? `还有 ${unanswered} 道题没有作答，交卷后不能修改。确定交卷吗？`
-    : '交卷后不能修改，确定交卷吗？';
+  const missing = unansweredNumbers.value;
+  const boxes = missing.map((n) => `<b class="mb-no">${n}</b>`).join('');
+  const tip = missing.length
+    ? `<p>还有 <b>${missing.length}</b> 道题没有作答：</p><p class="mb-list">${boxes}</p><p>交卷后不能修改。确定交卷吗？</p>`
+    : '<p>全部题目都已作答。</p><p>交卷后不能修改，确定交卷吗？</p>';
   try {
     await ElMessageBox.confirm(tip, '确认交卷', {
-      confirmButtonText: '交卷',
+      // 这段 HTML 里只有题目序号（数字），没有任何用户输入，所以拼接是安全的。
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: missing.length ? '仍然交卷' : '交卷',
       cancelButtonText: '再检查一下',
-      type: unanswered > 0 ? 'warning' : 'info'
+      type: missing.length ? 'warning' : 'info',
+      customClass: 'submit-confirm'
     });
   } catch {
     return;
@@ -213,6 +235,7 @@ onMounted(load);
 
 onBeforeUnmount(() => {
   if (tickTimer) clearInterval(tickTimer);
+  if (flashTimer) clearTimeout(flashTimer);
   if (ws) {
     ws.onclose = null;
     ws.close();
@@ -223,7 +246,7 @@ onBeforeUnmount(() => {
 <template>
   <div v-loading="loading" class="taking">
     <!-- 顶部固定条：剩余时间 + 进度 + 交卷。考试页最需要随时可见的就是这三样 -->
-    <div class="bar">
+    <div v-if="!loadError" class="bar">
       <div class="bar-left">
         <span class="bar-label">剩余时间</span>
         <span class="clock" :class="{ urgent }">{{ remainText }}</span>
@@ -236,56 +259,117 @@ onBeforeUnmount(() => {
       <el-button type="primary" :loading="submitting" @click="onSubmitClick">交卷</el-button>
     </div>
 
-    <div class="paper">
-      <div v-for="(q, idx) in paper" :key="q.id" class="q-card">
-        <div class="q-head">
-          <span class="q-no">{{ idx + 1 }}</span>
-          <span class="q-type">{{ typeLabel(q.type) }}</span>
-          <span class="q-score">{{ q.score }} 分</span>
-          <span v-if="savingIds.has(q.id)" class="q-saving">保存中…</span>
+    <SkeletonBlock v-if="loading" :rows="8" />
+
+    <ErrorState
+      v-else-if="loadError"
+      title="这张卷子没能打开"
+      :message="loadError"
+      @retry="load"
+    />
+
+    <template v-else>
+      <div class="taking-body">
+        <div class="paper">
+          <div
+            v-for="(q, idx) in paper"
+            :id="`q-${idx}`"
+            :key="q.id"
+            class="q-card"
+            :class="{ 'q-card-flash': flashId === idx, 'q-card-marked': marked.has(q.id) }"
+          >
+            <div class="q-head">
+              <span class="q-no">{{ idx + 1 }}</span>
+              <span class="q-type">{{ typeLabel(q.type) }}</span>
+              <span class="q-score">{{ q.score }} 分</span>
+              <span v-if="savingIds.has(q.id)" class="q-saving">保存中…</span>
+              <button
+                type="button"
+                class="q-mark"
+                :class="{ on: marked.has(q.id) }"
+                :aria-pressed="marked.has(q.id)"
+                @click="toggleMark(q)"
+              >
+                {{ marked.has(q.id) ? '已标记' : '标记' }}
+              </button>
+            </div>
+
+            <div class="q-stem">{{ q.stem }}</div>
+
+            <!-- 单选 / 判断：一个选项即提交 -->
+            <el-radio-group
+              v-if="q.type === 'single' || q.type === 'judge'"
+              v-model="answers[q.id]"
+              class="q-options"
+              @change="persist(q)"
+            >
+              <el-radio v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
+                <span class="opt-key">{{ opt.key }}</span>
+                <span>{{ opt.text }}</span>
+              </el-radio>
+            </el-radio-group>
+
+            <!-- 多选：勾完一次提交。el-checkbox-group 的 v-model 是数组，
+                 提交前要转成 'ABC' 这种字符串，后端 GradingRule 按字符集合比较 -->
+            <el-checkbox-group
+              v-else-if="q.type === 'multiple'"
+              :model-value="splitMultiAnswer(answers[q.id])"
+              class="q-options"
+              @change="(vals) => onMultiChange(q, vals)"
+            >
+              <el-checkbox v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
+                <span class="opt-key">{{ opt.key }}</span>
+                <span>{{ opt.text }}</span>
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+
+          <EmptyState
+            v-if="!paper.length"
+            text="这张卷子还没有题目，请联系老师。"
+          />
+
+          <div v-if="paper.length" class="submit-row">
+            <span class="muted">本卷共 {{ paper.length }} 题，总分 {{ totalScore }} 分</span>
+            <el-button type="primary" size="large" :loading="submitting" @click="onSubmitClick">
+              交卷
+            </el-button>
+          </div>
         </div>
 
-        <div class="q-stem">{{ q.stem }}</div>
-
-        <!-- 单选 / 判断：一个选项即提交 -->
-        <el-radio-group
-          v-if="q.type === 'single' || q.type === 'judge'"
-          v-model="answers[q.id]"
-          class="q-options"
-          @change="persist(q)"
-        >
-          <el-radio v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
-            <span class="opt-key">{{ opt.key }}</span>
-            <span>{{ opt.text }}</span>
-          </el-radio>
-        </el-radio-group>
-
-        <!-- 多选：勾完一次提交。el-checkbox-group 的 v-model 是数组，
-             提交前要转成 'ABC' 这种字符串，后端 GradingRule 按字符集合比较 -->
-        <el-checkbox-group
-          v-else-if="q.type === 'multiple'"
-          :model-value="String(answers[q.id] || '').split('').filter(Boolean)"
-          class="q-options"
-          @change="(vals) => { answers[q.id] = vals.slice().sort().join(''); persist(q); }"
-        >
-          <el-checkbox v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
-            <span class="opt-key">{{ opt.key }}</span>
-            <span>{{ opt.text }}</span>
-          </el-checkbox>
-        </el-checkbox-group>
+        <!-- 答题卡：题号宫格 + 已答/未答/标记三色 + 点击跳转。
+             旧版一张卷子要滚近 3000 像素，顶部只有一个「已答 3/10」，
+             想回第 2 题改一个答案只能靠手滚。 -->
+        <aside v-if="paper.length" class="answer-card" aria-label="答题卡">
+          <div class="ac-title">答题卡</div>
+          <div class="ac-progress">
+            <span class="ac-done">{{ answeredCount }}</span>
+            <span class="ac-total">/ {{ paper.length }}</span>
+          </div>
+          <div class="ac-grid">
+            <button
+              v-for="(q, idx) in paper"
+              :key="q.id"
+              type="button"
+              class="ac-cell"
+              :class="{
+                'is-done': isAnswered(q),
+                'is-marked': marked.has(q.id)
+              }"
+              :title="`第 ${idx + 1} 题${isAnswered(q) ? '（已答）' : '（未答）'}${marked.has(q.id) ? ' · 已标记' : ''}`"
+              @click="jumpTo(idx)"
+            >
+              {{ idx + 1 }}
+            </button>
+          </div>
+          <div class="ac-legend">
+            <span><i class="dot dot-done" />已答</span>
+            <span><i class="dot dot-todo" />未答</span>
+            <span><i class="dot dot-mark" />标记</span>
+          </div>
+        </aside>
       </div>
-
-      <div v-if="!paper.length && !loading" class="empty-tip">
-        这张卷子还没有题目，请联系老师。
-      </div>
-
-      <div v-if="paper.length" class="submit-row">
-        <span class="muted">本卷共 {{ paper.length }} 题，总分 {{ totalScore }} 分</span>
-        <el-button type="primary" size="large" :loading="submitting" @click="onSubmitClick">
-          交卷
-        </el-button>
-      </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -344,10 +428,19 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+/* 左边卷子、右边答题卡。答题卡是 sticky 的：滚到第 8 题时它还在视野里 */
+.taking-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 20px;
+  align-items: start;
+}
+
 .paper {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 
 .q-card {
@@ -355,6 +448,18 @@ onBeforeUnmount(() => {
   border: 1px solid #e4e7ed;
   border-radius: 8px;
   padding: 20px 24px;
+  /* 跳转高亮用 outline 而不是 border：border 会改变盒子尺寸，让页面抖一下 */
+  scroll-margin-top: 80px;
+  transition: outline-color 0.2s;
+  outline: 2px solid transparent;
+}
+
+.q-card-flash {
+  outline-color: #409eff;
+}
+
+.q-card-marked {
+  border-color: #e6a23c;
 }
 
 .q-head {
@@ -391,6 +496,28 @@ onBeforeUnmount(() => {
   margin-left: auto;
   font-size: 12px;
   color: #e6a23c;
+}
+
+.q-mark {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fff;
+  color: #909399;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.q-mark:hover {
+  color: #e6a23c;
+  border-color: #f3d19e;
+}
+
+.q-mark.on {
+  color: #b88230;
+  border-color: #e6a23c;
+  background: #fdf6ec;
 }
 
 .q-stem {
@@ -435,5 +562,117 @@ onBeforeUnmount(() => {
   background: #fff;
   border: 1px solid #e4e7ed;
   border-radius: 8px;
+}
+
+/* ---------------- 答题卡 ---------------- */
+.answer-card {
+  position: sticky;
+  top: 140px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+}
+
+.ac-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.ac-progress {
+  margin: 6px 0 12px;
+  font-size: 13px;
+  color: #909399;
+}
+
+.ac-done {
+  color: #409eff;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ac-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.ac-cell {
+  aspect-ratio: 1;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fff;
+  color: #606266;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ac-cell:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+/* 已答：填充；未答：空白轮廓。两者靠「有没有底」区分，
+   不靠颜色深浅 —— 色弱的人也能分出来。 */
+.ac-cell.is-done {
+  background: #409eff;
+  border-color: #409eff;
+  color: #fff;
+}
+
+/* 标记：底下加一条橙色横线，和已答的填充不冲突（已答+标记能同时成立） */
+.ac-cell.is-marked {
+  box-shadow: inset 0 -3px 0 #e6a23c;
+}
+
+.ac-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.ac-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid #dcdfe6;
+}
+
+.dot-done { background: #409eff; border-color: #409eff; }
+.dot-todo { background: #fff; }
+.dot-mark { background: #fff; border-color: #e6a23c; box-shadow: inset 0 -3px 0 #e6a23c; }
+
+/* 窄屏：答题卡从右栏变成卷子上方的一条，宫格自动铺满整行。
+   不隐藏它 —— 手机用户比桌面用户更需要「跳到第几题」。 */
+@media (max-width: 900px) {
+  .taking-body {
+    grid-template-columns: 1fr;
+  }
+
+  .answer-card {
+    position: static;
+    order: -1;
+  }
+
+  .ac-grid {
+    grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  }
+
+  .bar {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
 }
 </style>

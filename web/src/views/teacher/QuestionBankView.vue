@@ -1,9 +1,13 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/utils/feedback'
 import { listQuestions, createQuestion } from '@/api'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
-const loading = ref(false);
+const loading = ref(true);
+const loadError = ref('');
 const questions = ref([]);
 const filter = reactive({ subject: '', type: '' });
 
@@ -54,13 +58,14 @@ const isMultiple = computed(() => form.type === 'multiple');
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     const params = {};
     if (filter.subject) params.subject = filter.subject;
     if (filter.type) params.type = filter.type;
     questions.value = await listQuestions(params);
   } catch (e) {
-    ElMessage.error(e.message);
+    loadError.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -167,8 +172,17 @@ onMounted(load);
     </div>
 
     <el-card shadow="never">
-      <div v-loading="loading">
-        <el-table v-if="questions.length" :data="questions" stripe>
+      <div>
+        <SkeletonBlock v-if="loading" :rows="5" dense />
+
+        <ErrorState
+          v-else-if="loadError"
+          title="题库加载失败"
+          :message="loadError"
+          @retry="load"
+        />
+
+        <el-table v-else-if="questions.length" :data="questions" stripe>
           <el-table-column prop="id" label="ID" width="70" />
           <el-table-column prop="subject" label="科目" width="90" />
           <el-table-column label="题型" width="80">
@@ -183,9 +197,11 @@ onMounted(load);
           <el-table-column prop="difficulty" label="难度" width="70" />
         </el-table>
 
-        <div v-else-if="!loading" class="empty-tip">
-          没有符合条件的题目。
-        </div>
+        <EmptyState
+          v-else
+          text="没有符合条件的题目。"
+          hint="清掉上面的筛选条件再查一次，或者点「新建题目」。"
+        />
       </div>
     </el-card>
 

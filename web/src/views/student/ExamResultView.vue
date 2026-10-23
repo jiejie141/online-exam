@@ -1,14 +1,21 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { getResult } from '@/api'
+import { parseOptions, choicesOf, typeLabel } from '@/utils/exam'
+import SkeletonBlock from '@/components/SkeletonBlock.vue'
+import ErrorState from '@/components/ErrorState.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const route = useRoute();
 const router = useRouter();
 
 const recordId = Number(route.params.recordId);
 const loading = ref(true);
+// 三种界面分开：加载中 / 加载失败 / 判分中。
+// 旧版把失败并进了「判分中」的 catch，一个网络错误会显示成
+// 「答卷已提交，正在判分」—— 那是把错误伪装成一个正常状态。
+const loadError = ref('');
 const pending = ref(false);
 const data = ref(null);
 
@@ -39,26 +46,6 @@ const rows = computed(() => {
 
 const correctCount = computed(() => rows.value.filter((r) => r.correct === true).length);
 
-function parseOptions(raw) {
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function choicesOf(q) {
-  if (q.type === 'judge') {
-    return [{ key: 'T', text: '正确' }, { key: 'F', text: '错误' }];
-  }
-  return parseOptions(q.options);
-}
-
-function typeLabel(t) {
-  return { single: '单选题', multiple: '多选题', judge: '判断题' }[t] || t;
-}
 
 function answerText(q, raw) {
   if (raw === null || raw === undefined || raw === '') return '（未作答）';
@@ -75,6 +62,7 @@ function answerText(q, raw) {
 }
 
 function load() {
+  loadError.value = '';
   return getResult(recordId)
     .then((d) => {
       data.value = d;
@@ -93,7 +81,9 @@ function load() {
         startPolling();
         return;
       }
-      ElMessage.error(e.message);
+      // 其它失败（网络断了、成绩单被清了、越权）留在本页显示错误与重试，
+      // 而不是弹一下就让人看不见原因。
+      loadError.value = e.message;
     });
 }
 
@@ -121,6 +111,9 @@ async function refresh() {
   loading.value = false;
 }
 
+// 「判分中」这个状态是后端判完之前唯一能给的答案，所以要让它自己继续问；
+// 但错误态不轮询 —— 网络断了每秒重试一次只会刷出一串红字。
+
 onMounted(async () => {
   await load();
   loading.value = false;
@@ -132,15 +125,27 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-loading="loading">
+  <div>
     <div class="toolbar">
       <h2 class="page-title" style="margin: 0">成绩单</h2>
       <div class="toolbar-spacer" />
       <el-button @click="router.replace({ name: 'student-exams' })">返回考试列表</el-button>
     </div>
 
+    <!-- 四种界面各走各的：加载中 / 加载失败 / 判分中 / 有结果。
+         旧版把「加载中」交给 v-loading 遮罩、把失败塞进判分中的分支，
+         于是网络错误和学生看到的是同一块「正在判分」的卡片。 -->
+    <SkeletonBlock v-if="loading" :rows="7" />
+
+    <ErrorState
+      v-else-if="loadError"
+      title="成绩单加载失败"
+      :message="loadError"
+      @retry="refresh"
+    />
+
     <!-- 判分中：明确告诉学生「已收到，正在算」，而不是显示一个 0 分 -->
-    <el-card v-if="pending" shadow="never" class="pending-card">
+    <el-card v-else-if="pending" shadow="never" class="pending-card">
       <!-- 用纯 CSS 转圈而不是 @element-plus/icons-vue 的图标组件： -->
       <!-- 那是一个额外的依赖，只为转一个圈不值得装 -->
       <span class="pending-spinner" aria-hidden="true"></span>
@@ -149,7 +154,13 @@ onBeforeUnmount(() => {
       <el-button type="primary" plain @click="refresh">手动刷新</el-button>
     </el-card>
 
-    <template v-else-if="data">
+    <EmptyState
+      v-else-if="!data"
+      text="没有拿到这份答卷"
+      hint="可能是链接过期或答卷已被删除，回考试列表重新进一次。"
+    />
+
+    <template v-else>
       <el-card shadow="never" class="score-card">
         <div class="score-main">
           <div class="score-num">{{ score }}</div>
