@@ -48,9 +48,16 @@ public interface ExamAnswerMapper extends BaseMapper<ExamAnswer> {
      * 所以必须 COALESCE，否则前端拿到 null 会显示成空白。
      *
      * <p>r.score IS NOT NULL 限定只统计已判分的答卷。
+     *
+     * <p><b>别名必须写 attempt，不能写 attempt_count。</b>
+     * map-underscore-to-camel-case 只负责把 snake_case 转成驼峰，
+     * attempt_count 会被转成 attemptCount，而 QuestionAccuracy 上的字段叫 attempt，
+     * 两边对不上时 MyBatis 不报错、只是把 attempt 留成 null —— 表现为老师端
+     * "作答人数"整列空白、"正确率"整列显示 "—"。这个坑在跑通接口时完全看不出来
+     * （HTTP 200、JSON 也有 data），只有盯着字段值才发现。
      */
     @Select("SELECT q.id AS question_id, q.stem AS stem, " +
-            "       COUNT(*) AS attempt_count, " +
+            "       COUNT(*) AS attempt, " +
             "       COALESCE(SUM(CASE WHEN a.correct = 1 THEN 1 ELSE 0 END), 0) AS correct_count " +
             "FROM exam_answer a " +
             "JOIN question q ON q.id = a.question_id " +
@@ -58,6 +65,6 @@ public interface ExamAnswerMapper extends BaseMapper<ExamAnswer> {
             "WHERE r.exam_id = #{examId} AND r.score IS NOT NULL " +
             "GROUP BY q.id, q.stem " +
             "ORDER BY COALESCE(SUM(CASE WHEN a.correct = 1 THEN 1 ELSE 0 END), 0) * 1.0 / COUNT(*) ASC, " +
-            "         attempt_count DESC")
+            "         attempt DESC")
     List<QuestionAccuracy> accuracyByExam(@Param("examId") Long examId);
 }

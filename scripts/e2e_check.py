@@ -186,6 +186,19 @@ def main():
     if latency_ms is not None:
         print(f"      交卷->出分 延迟 {latency_ms} ms")
 
+    # 成绩页要能画出"哪道题、我答了什么、对还是错"。
+    # ExamAnswer 里只有 questionId，没有题干 —— 所以 result 接口必须
+    # 同时带回不含答案的卷面（PaperItem），前端按 questionId 对齐。
+    # 这里顺带钉住两件事：paper 长度对得上、且它**依然不含 answer 字段**
+    # （题目答案不能因为多带了一份卷面就漏进学生端）。
+    st, body = api.call("GET", f"/api/records/{record_id}/result", token=ss)
+    res = body["data"]
+    check("成绩单带回本场 examId", res.get("examId") == exam_id, str(res.get("examId")))
+    check("成绩单带回 10 题卷面（用于渲染题干）", len(res.get("paper") or []) == 10,
+          f"{len(res.get('paper') or [])}")
+    leaked = [q for q in (res.get("paper") or []) if "answer" in q or "correctAnswer" in q]
+    check("成绩单卷面没有泄露答案字段", not leaked, str(leaked[:1]))
+
     print("\n[7] 重复交卷幂等")
     st, body = api.call("POST", f"/api/records/{record_id}/submit", token=ss)
     st2, body2 = api.call("GET", f"/api/records/{record_id}/result", token=ss)
@@ -212,6 +225,17 @@ def main():
     missed = [q for q in acc if q["questionId"] == missed_id]
     check("漏选题的正确率是 0（不算对）",
           bool(missed) and missed[0]["correctCount"] == 0, str(missed))
+    # 只断言 correctCount 是不够的：曾经 SQL 把 COUNT(*) 别名写成 attempt_count，
+    # 而 DTO 字段叫 attempt，MyBatis 对不上时不报错、只把 attempt 留成 null。
+    # 结果接口照样 200、correctCount 也对，只有老师端"作答人数"整列空白。
+    # 所以这里必须把 attempt 也钉住 —— "有值"和"是 1"分开断言，
+    # 前者能定位"字段根本没映射上"，后者能定位"算错了"。
+    check("逐题正确率的 attempt 字段有值（别名映射没断）",
+          all(q.get("attempt") is not None for q in acc),
+          str([q for q in acc if q.get("attempt") is None][:3]))
+    check("作答人数就是已判分的答卷数（1 人）",
+          all(q.get("attempt") == 1 for q in acc),
+          str({q["questionId"]: q.get("attempt") for q in acc}))
 
     print("\n[10] 权限边界")
     st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=ss)
