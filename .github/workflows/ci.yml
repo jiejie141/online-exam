@@ -147,7 +147,15 @@ jobs:
           rc=$?
           cat target/e2e-run.log
           steps=$(grep -E '^== |^!!|^MySQL ready|^app ready' target/e2e-run.log 2>/dev/null | tr '\n' ' ' | head -c 700)
-          echo "::error title=e2e.sh 退出码=${rc}::${steps:-（没有任何进度输出）}"
+          # 成功时必须发 notice 而不是 error。
+          # 之前这里无条件发 ::error，于是全绿的 run 页面上也挂着一条
+          # 「1 error」，标题还写着「退出码=0」—— 正是本项目反复踩的那个坑：
+          # 仪表在骗人。判据是 rc，不是「有没有输出」。
+          if [ "$rc" -eq 0 ]; then
+            echo "::notice title=e2e.sh 通过::${steps:-（没有任何进度输出）}"
+          else
+            echo "::error title=e2e.sh 退出码=${rc}::${steps:-（没有任何进度输出）}"
+          fi
           exit $rc
 
       # 失败时把关键信息**压缩成极少数几行**推出来。
