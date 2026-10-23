@@ -241,6 +241,25 @@ def main():
     st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=ss)
     check("学生访问老师接口被拒（403）", st == 403, f"http {st}")
 
+    # 老师与老师之间也要隔离。只校验 ROLE_teacher 是不够的 ——
+    # 那回答的是"你是不是老师"，而不是"这场考试是不是你的"。
+    # 少了这一层，任何老师只要猜到 examId 就能看别人的全班成绩、
+    # 甚至把别人还没考完的考试直接关掉。
+    api.call("POST", "/api/teacher/users", token=tt,
+             body={"username": "t002", "password": "teacher123",
+                   "realName": "另一位老师", "role": "teacher"})
+    t2 = login(api, "t002", "teacher123")
+    st, body = api.call("GET", "/api/teacher/exams", token=t2)
+    check("新老师看不到别人建的考试列表",
+          all(e["id"] != exam_id for e in (body.get("data") or [])),
+          f"{len(body.get('data') or [])} 场")
+    st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=t2)
+    check("新老师查不到别人考试的成绩（403）", body.get("code") == 403,
+          f"code={body.get('code')}")
+    st, body = api.call("POST", f"/api/teacher/exams/{exam_id}/close", token=t2)
+    check("新老师关不掉别人的考试（403）", body.get("code") == 403,
+          f"code={body.get('code')}")
+
     # ---------------- 延迟实测 ----------------
     print(f"\n[11] 判分延迟实测（另造 {args.students} 名学生各交一份卷）")
     latencies = []

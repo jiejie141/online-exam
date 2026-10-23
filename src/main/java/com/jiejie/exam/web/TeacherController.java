@@ -66,17 +66,18 @@ public class TeacherController {
         return ApiResponse.ok(examService.createQuestion(q));
     }
 
-    /** 老师端考试列表（含草稿）—— 前端需要它才能选一场考试去看统计 / 发布 / 结束 */
+    /** 老师端考试列表（含草稿，只含自己建的）—— 前端需要它才能选一场考试去看统计 / 发布 / 结束 */
     @GetMapping("/exams")
-    public ApiResponse<List<Exam>> listExams() {
-        return ApiResponse.ok(examService.listExams());
+    public ApiResponse<List<Exam>> listExams(@AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(examService.listExams(me.userId()));
     }
 
-    /** 题库列表。subject / type 可选，不传就是全部 */
+    /** 题库列表（只含自己出的题）。subject / type 可选，不传就是全部 */
     @GetMapping("/questions")
     public ApiResponse<List<Question>> listQuestions(@RequestParam(required = false) String subject,
-                                                     @RequestParam(required = false) String type) {
-        return ApiResponse.ok(examService.listQuestions(subject, type));
+                                                     @RequestParam(required = false) String type,
+                                                     @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(examService.listQuestions(subject, type, me.userId()));
     }
 
     @PostMapping("/exams")
@@ -91,40 +92,48 @@ public class TeacherController {
     /** 往卷子里加题。score 不传就用题目自带的分值 */
     @PostMapping("/exams/{examId}/questions")
     public ApiResponse<Integer> addQuestions(@PathVariable Long examId,
-                                             @Valid @RequestBody AddQuestionsRequest request) {
-        return ApiResponse.ok(examService.addQuestions(examId, request.questionIds(), request.score()));
+                                             @Valid @RequestBody AddQuestionsRequest request,
+                                             @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(examService.addQuestions(examId, request.questionIds(), request.score(),
+                me.userId()));
     }
 
     @PostMapping("/exams/{examId}/publish")
-    public ApiResponse<Void> publish(@PathVariable Long examId) {
-        examService.publish(examId);
+    public ApiResponse<Void> publish(@PathVariable Long examId,
+                                     @AuthenticationPrincipal Principal me) {
+        examService.publish(examId, me.userId());
         return ApiResponse.ok(null);
     }
 
     @PostMapping("/exams/{examId}/close")
-    public ApiResponse<Void> close(@PathVariable Long examId) {
-        examService.close(examId);
+    public ApiResponse<Void> close(@PathVariable Long examId,
+                                   @AuthenticationPrincipal Principal me) {
+        examService.close(examId, me.userId());
         return ApiResponse.ok(null);
     }
 
     @GetMapping("/exams/{examId}/stats")
-    public ApiResponse<ExamScoreStats> stats(@PathVariable Long examId) {
-        return ApiResponse.ok(statsService.stats(examId));
+    public ApiResponse<ExamScoreStats> stats(@PathVariable Long examId,
+                                             @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(statsService.stats(examId, me.userId()));
     }
 
     @GetMapping("/exams/{examId}/distribution")
-    public ApiResponse<List<ScoreBucket>> distribution(@PathVariable Long examId) {
-        return ApiResponse.ok(statsService.distribution(examId));
+    public ApiResponse<List<ScoreBucket>> distribution(@PathVariable Long examId,
+                                                       @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(statsService.distribution(examId, me.userId()));
     }
 
     /** 逐题正确率，正确率最低的排最前 —— 讲评先看这些题 */
     @GetMapping("/exams/{examId}/accuracy")
-    public ApiResponse<List<QuestionAccuracy>> accuracy(@PathVariable Long examId) {
-        return ApiResponse.ok(statsService.accuracy(examId));
+    public ApiResponse<List<QuestionAccuracy>> accuracy(@PathVariable Long examId,
+                                                        @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(statsService.accuracy(examId, me.userId()));
     }
 
     @GetMapping("/exams/{examId}/progress")
-    public ApiResponse<StatsService.Progress> progress(@PathVariable Long examId) {
-        return ApiResponse.ok(statsService.progress(examId));
+    public ApiResponse<StatsService.Progress> progress(@PathVariable Long examId,
+                                                       @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(statsService.progress(examId, me.userId()));
     }
 }

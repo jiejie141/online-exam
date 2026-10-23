@@ -174,13 +174,15 @@ ws.onmessage = e => console.log(e.data);   // {"remainingSeconds":3540,"ended":f
 | POST | `/api/records/{recordId}/submit` | 交卷（重复点安全） |
 | GET | `/api/records/{recordId}/result` | 查成绩 |
 
-老师端（需 `ROLE_teacher`）：
+老师端（需 `ROLE_teacher`，且只能操作**自己建的**考试和题目，见设计要点第 8 条）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/teacher/users` | 建账号 |
 | POST | `/api/teacher/questions` | 出题 |
+| GET | `/api/teacher/questions` | 题库（只含自己出的题） |
 | POST | `/api/teacher/exams` | 建考试（草稿） |
+| GET | `/api/teacher/exams` | 自己的考试列表（含草稿） |
 | POST | `/api/teacher/exams/{id}/questions` | 组卷 |
 | POST | `/api/teacher/exams/{id}/publish` | 发布（总分按卷面自动累加） |
 | POST | `/api/teacher/exams/{id}/close` | 结束 |
@@ -249,6 +251,32 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 剩余时间用**数据库里的 `deadline_at`** 和**服务端时钟**算，客户端传什么都不影响。
 改浏览器本地时间换不到额外时间。
 
+### 8. 老师端按 `created_by` 判归属（`exam/ExamAccess.java`）
+
+只校验 `ROLE_teacher` 回答的是「你是不是老师」，**不是**「这场考试是不是你的」。
+少了后者，任何老师知道 `examId` 就能发布、结束别人的考试，还能看别人那场考试的全班成绩。
+
+所以七个入口（`publish` / `close` / `addQuestions` / `stats` / `distribution` /
+`accuracy` / `progress`）统一走 `ExamAccess.requireOwned(examId, teacherId)`，
+列表类接口（`listExams` / `listQuestions`）在 wrapper 上加 `created_by = 当前用户`。
+
+三个刻意的选择：
+
+- **抽成一个类，不在各方法里各写一遍。** 同一个判断散在七处，等于给后来加端点的人
+  留一个「忘了写」的机会 —— 而忘了写**不会报错，只会静默放行**。集中之后，
+  新端点不走它就**拿不到 `Exam` 对象**（方法返回它），漏了很显眼。
+- **用 403 不用 404。** 考试确实存在，只是不属于你。用 404 会让「不存在」和
+  「不是你的」变成同一种回答，反而方便别人试探哪些 id 是真的。
+  学生端的 `requireOwnRecord` 用的是同一口径。
+- **`created_by` 为 NULL 时拒绝，不是放行（fail-closed）。** 这个库里所有考试都经过
+  `createExam` 创建，它一定写 `created_by`，所以这条分支只会被手写 SQL 造出的
+  无主数据命中。真出现了，正确做法是回填 `created_by`，而不是让所有老师都能改一场
+  谁都不负责的考试。
+
+同一处还有个容易被忽略的边界：`createQuestion` 现在拒绝 `createdBy == null`。
+题目的**可读性完全靠 `created_by` 过滤**，存成 NULL 的题目从此谁都看不见 ——
+等于写进了一个黑洞，而且写入时一切正常。
+
 ## 六、实测数字
 
 全部来自 `scripts/e2e.sh` 和 `scripts/bench.sh` 的真实运行输出，不是估算。
@@ -289,7 +317,7 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 mvn test
 ```
 
-126 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
+144 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
 
 | 测试类 | 条数 | 覆盖 |
 |---|---|---|
@@ -307,6 +335,9 @@ mvn test
 | `GlobalExceptionHandlerTest` | 14 | 异常到 HTTP 的翻译：业务异常状态码跟着 code 走（401/403/404/降级 400）、四类客户端错误不被吞成 500、500 不泄露堆栈 |
 | `PaperItemTest` | 5 | 卷面 DTO 无 `answer` 字段（字段反射 + 序列化双重检查）、该有的字段一个不少、判断题不发 options |
 | `MapperAliasTest` | 5 | 统计 SQL 的每个 `AS` 别名都能落到对应 DTO 的字段上（见下面第 1 条：这是唯一一个不连库却能抓到 SQL 列名错误的测试） |
+| `ExamAccessTest` | 4 | 老师端归属闸门：自己的考试返回原对象、别人的 403 而非 404、不存在 400、`created_by` 为空时拒绝而不是放行 |
+| `ExamServiceTest` | 8 | 别人不能往他人卷子里加题/发布/结束（且一行都没写进去）、总分按卷面累加、及格线高于总分拒绝发布、空卷拒绝发布、题目必须有出题老师 |
+| `StatsServiceTest` | 6 | 四个统计接口都过归属校验、没人判分时补 0 而不是空指针（avg/max/min 保持 null）、交卷进度把 graded 也算作已交 |
 
 ## 八、已知限制（没做的，不装作做了）
 
@@ -359,7 +390,7 @@ mvn test
    现构建再 COPY 的，这一环断了的话镜像照样构建成功、容器照样起、健康检查照样绿，
    只是打开是 404 —— 没有任何一条断言会碰到它。
 10. **前端没有自动化测试。** 没有 Vitest 单测、没有 Playwright 端到端，
-    页面是手动点过的。后端接口有 126 条单测 + e2e 脚本兜着，
+    页面是手动点过的。后端接口有 144 条单测 + e2e 脚本兜着，
     但"页面上那个按钮点了会不会报错"目前只靠人看。
 11. **前端没做按需引入。** Element Plus 是整包引入的，主 chunk 1.1 MB（gzip 370 KB），
     构建时有一条 `chunks are larger than 500 kB` 警告。做按需引入能砍掉大半，
