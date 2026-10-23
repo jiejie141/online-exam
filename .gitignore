@@ -22,3 +22,13 @@ application-local.yml
 *.log
 
 target/e2e-check.log
+
+### 前端 ###
+# web/ 是前端源码；src/main/resources/static/ 是 npm run build 的产物。
+# 产物不入库：它是构建结果，不是需要人维护的源码，入库只会让每次改前端都产生
+# 一整屏 diff（文件名带 hash，旧的还得手动删）。
+# 代价是「clone 下来直接 mvn package」打出的 jar 里没有页面 ——
+# 所以 README 写了必须先 build 前端，Dockerfile 里也加了 node 构建阶段。
+src/main/resources/static/
+web/node_modules/
+web/dist/
