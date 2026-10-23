@@ -23,9 +23,17 @@ public class SecurityConfig {
      *   /api/auth/**      登录、注册        —— 匿名
      *   /actuator/health  健康检查          —— 匿名
      *   /ws/**            WebSocket 握手    —— 握手时单独校验 token
+     *   /index.html, /assets/**  前端静态资源 —— 匿名
      *   /api/teacher/**   出题、发布、看统计 —— ROLE_teacher
      *   其余              学生答题          —— 登录即可
      * </pre>
+     *
+     * <p><b>静态资源必须匿名可读，但只能精确到这几个路径。</b>
+     * 前端用的是 hash 路由（/#/exams），服务端看到的永远只有 {@code /}、
+     * {@code /index.html} 和 {@code /assets/xxx.js} —— 所以放行范围能写到这么窄。
+     * 如果改成 history 路由，刷新 /exam/1 时服务端收到的是真实路径 /exam/1，
+     * 想让它能刷新就只能放行 "/**"，而那会把 /api/** 一起放行掉。
+     * 这是选 hash 路由最实在的理由。
      */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws Exception {
@@ -36,6 +44,9 @@ public class SecurityConfig {
                         // /ws/** 不在这里鉴权：浏览器 WebSocket 握手带不了自定义头，
                         // token 走查询参数，由 TokenHandshakeInterceptor 单独校验
                         .requestMatchers("/api/auth/**", "/actuator/health", "/actuator/info", "/ws/**").permitAll()
+                        // 前端静态资源。写成具体路径而不是 "/**"：
+                        // "/**" 会把 /api/** 一起放行，等于关掉整个鉴权。
+                        .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**").permitAll()
                         .requestMatchers("/api/teacher/**").hasRole("teacher")
                         .anyRequest().authenticated())
                 // 不配 exceptionHandling 时，Spring Security 对未认证请求用的是

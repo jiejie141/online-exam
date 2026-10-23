@@ -130,6 +130,34 @@ public class ExamService {
         examMapper.updateById(exam);
     }
 
+    /**
+     * 老师端考试列表。按开始时间倒序 —— 最近要开的排在最前面，
+     * 这才是老师打开页面时想先看到的东西。
+     */
+    public List<Exam> listExams() {
+        return examMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Exam>()
+                .orderByDesc(Exam::getStartAt));
+    }
+
+    /**
+     * 题库列表。subject / type 都可为空，为空就不加这个条件。
+     *
+     * <p>这里返回的是 {@link Question}（<b>含正确答案</b>），只给老师端用。
+     * 学生端任何路径都必须走 {@code PaperItem}，那是没有 answer 字段的 DTO。
+     */
+    public List<Question> listQuestions(String subject, String type) {
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Question> q =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        if (subject != null && !subject.isBlank()) {
+            q.eq(Question::getSubject, subject);
+        }
+        if (type != null && !type.isBlank()) {
+            q.eq(Question::getType, type);
+        }
+        q.orderByDesc(Question::getId);
+        return questionMapper.selectList(q);
+    }
+
     public Long createQuestion(Question question) {
         // 答案必须先校验，否则题目进了库才发现判不了分
         QuestionType.of(question.getType());

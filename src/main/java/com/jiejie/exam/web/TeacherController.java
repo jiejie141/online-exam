@@ -3,6 +3,7 @@ package com.jiejie.exam.web;
 import com.jiejie.exam.domain.dto.ExamScoreStats;
 import com.jiejie.exam.domain.dto.QuestionAccuracy;
 import com.jiejie.exam.domain.dto.ScoreBucket;
+import com.jiejie.exam.domain.entity.Exam;
 import com.jiejie.exam.domain.entity.Question;
 import com.jiejie.exam.exam.ExamService;
 import com.jiejie.exam.security.Principal;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
@@ -62,6 +64,19 @@ public class TeacherController {
         q.setDifficulty(request.difficulty() == null ? 1 : request.difficulty());
         q.setCreatedBy(me.userId());
         return ApiResponse.ok(examService.createQuestion(q));
+    }
+
+    /** 老师端考试列表（含草稿）—— 前端需要它才能选一场考试去看统计 / 发布 / 结束 */
+    @GetMapping("/exams")
+    public ApiResponse<List<Exam>> listExams() {
+        return ApiResponse.ok(examService.listExams());
+    }
+
+    /** 题库列表。subject / type 可选，不传就是全部 */
+    @GetMapping("/questions")
+    public ApiResponse<List<Question>> listQuestions(@RequestParam(required = false) String subject,
+                                                     @RequestParam(required = false) String type) {
+        return ApiResponse.ok(examService.listQuestions(subject, type));
     }
 
     @PostMapping("/exams")

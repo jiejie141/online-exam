@@ -56,8 +56,17 @@ public class ExamSessionService {
     public record SubmitResult(Long recordId, String status, Integer score) {
     }
 
-    public record ExamResultView(Long recordId, Integer score, String status,
-                                 List<ExamAnswer> answers) {
+    /**
+     * 成绩页需要的东西。
+     *
+     * <p>{@code answers} 只有 questionId / userAnswer / correct / scoreGot —— 没有题干，
+     * 所以单靠它渲染不出一张能看的成绩单。{@code paper} 带上原题（不含正确答案，
+     * 用的是同一个 PaperItem），前端按 questionId 把两者对起来。
+     *
+     * <p>{@code examId} 是给前端跳回考试用的，顺带省掉一次查询。
+     */
+    public record ExamResultView(Long recordId, Long examId, Integer score, String status,
+                                 List<PaperItem> paper, List<ExamAnswer> answers) {
     }
 
     private final ExamMapper examMapper;
@@ -243,8 +252,8 @@ public class ExamSessionService {
         if (!RecordStatus.GRADED.code().equals(record.getStatus())) {
             throw new BusinessException("还没判完，请稍后再看");
         }
-        return new ExamResultView(recordId, record.getScore(), record.getStatus(),
-                answerMapper.listByRecord(recordId));
+        return new ExamResultView(recordId, record.getExamId(), record.getScore(), record.getStatus(),
+                paper(record.getExamId()), answerMapper.listByRecord(recordId));
     }
 
     // ---------------- 内部 ----------------
