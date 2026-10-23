@@ -7,7 +7,9 @@
 
 CI 上三个 job 都跑真东西：单元测试在 Java 17 / 21 双版本上跑，
 e2e job 连真 MySQL / Redis / RabbitMQ 跑完整流程（含判分延迟实测），
-docker job 真的构建镜像并验证「缺密钥就拒绝启动」。
+docker job 真的构建镜像，验证「缺密钥就拒绝启动」，并且把 jar 从镜像里抠出来
+确认前端页面确实被打进去了（前端产物不进 git，是 Dockerfile 里现构建的，
+这一环断了的话镜像照样构建成功、健康检查照样绿，只是打开是 404）。
 
 ---
 
@@ -26,9 +28,10 @@ docker job 真的构建镜像并验证「缺密钥就拒绝启动」。
 | 层 | 选型 | 为什么 |
 |---|---|---|
 | Web | Spring Boot 3.3.4 + **Spring MVC** | 交卷+判分要整体成功或整体失败，必须用 `@Transactional` 和 ThreadLocal，WebFlux 的事件循环模型下用不了 |
+| 前端 | Vue 3 + Vite + Element Plus + Pinia + Vue Router | 前后端分离，但**构建产物由后端一起托管**，所以部署仍然只有一个进程、没有 CORS |
 | ORM | MyBatis-Plus 3.5.7 | 统计查询要写 JOIN + CASE + 分组，注解式 SQL 比 XML 更容易和 Java 代码一起 review |
 | 数据库 | MySQL 8 | 用到了 JSON 列、`INSERT ... AS new ON DUPLICATE KEY UPDATE` |
-| 缓存 | Redis（Lettuce） | 卷面缓存，含穿透/击穿/雪崩三件事的处理 |
+| 缓存 | Caffeine（L1）+ Redis（L2，Lettuce） | 两级卷面缓存，含穿透/击穿/雪崩三件事的处理 |
 | 消息 | RabbitMQ | 交卷后异步判分，Broker 挂了自动降级同步判分 |
 | 实时 | WebSocket | 服务端推送考试倒计时 |
 | 鉴权 | Spring Security + JWT | 无状态，学生/老师两个角色 |
@@ -89,7 +92,38 @@ bash scripts/e2e.sh          # 端到端校验，含判分延迟实测
 bash scripts/bench.sh        # 取卷吞吐 A/B 压测
 ```
 
-### 4. 走一遍流程
+### 4. 前端页面
+
+前端在 `web/`，构建产物落到 `src/main/resources/static/`，由 Spring Boot 直接托管。
+**构建产物不进 git**（见 `.gitignore`），所以 clone 下来要自己 build 一次：
+
+```bash
+cd web
+npm ci            # 严格按 package-lock.json 装，版本与 CI 一致
+npm run build     # 产物写到 ../src/main/resources/static/
+```
+
+然后起后端，浏览器打开 <http://localhost:8081/>：
+
+| 页面 | 账号 |
+|---|---|
+| 学生端：我的考试 → 答题 → 成绩 | `s001` / `student123` |
+| 老师端：考试管理 / 题库管理 / 成绩统计 | `t001` / `teacher123` |
+
+改前端时用 dev 模式（热更新，5173 端口，代理到 8081 的后端）：
+
+```bash
+cd web && npm run dev
+```
+
+**为什么路由用 hash 模式**：页面由后端托管，如果走 history 模式，
+用户在 `/teacher/exams` 上按 F5，请求会打到后端，而 Spring 找不到这个路径 —— 要么 404，
+要么得配一条把所有路径都转发到 index.html 的规则，那条规则又会和 `/api/**` 抢路由。
+hash 模式（`/#/teacher/exams`）下 `#` 之后的内容不会发给服务端，服务端永远只看到 `/`，
+所以 `SecurityConfig` 里能精确地只放行 `/`、`/index.html`、`/favicon.ico`、`/assets/**` ——
+**而不是 `/**`**（那会把 `/api/**` 一起放行，等于关掉整个鉴权）。
+
+### 5. 走一遍流程
 
 ```bash
 # 学生登录
@@ -119,7 +153,7 @@ curl -s http://localhost:8081/api/teacher/exams/1/distribution -H "Authorization
 curl -s http://localhost:8081/api/teacher/exams/1/accuracy     -H "Authorization: Bearer $TT"
 ```
 
-### 5. 倒计时（WebSocket）
+### 6. 倒计时（WebSocket）
 
 ```javascript
 const ws = new WebSocket(`ws://localhost:8081/ws/countdown?token=${TOKEN}&examId=1`);
@@ -186,12 +220,19 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 | 重复交卷只判一次 | `UPDATE ... WHERE status='ongoing'`，影响行数 0 说明别人先做了 |
 | 重复判分不加两遍 | `UPDATE ... WHERE status='submitted'`，0 行就抛错让事务回滚 |
 
-### 4. 缓存三件事（`cache/PaperCache.java`）
+### 4. 两级缓存 + 穿透/击穿/雪崩（`cache/PaperCache.java`）
 
-- **穿透**：空结果也缓存，存哨兵 `__NULL__` 而不是空串。
+- **L1 本地（Caffeine）+ L2 Redis**。开考瞬间几百人拉同一份卷子，走 L1 时连网络都不出。
+- **穿透**：空结果也缓存，存哨兵 `__NULL__` 而不是空串。**L1 也要写**——否则空卷面每 30 秒还是要打一次 Redis，穿透防护只在 L2 生效。
 - **击穿**：重建前 `setIfAbsent` 抢锁，抢到的才查库，释放用 Lua 保证只删自己的锁。
 - **雪崩**：TTL 加 ±20% 抖动，`jitteredTtl()` 是纯函数（随机数由调用方传入）所以能单测。
 - **额外**：Redis 挂了全部降级成直接查库——缓存是加速用的，不能因为它抖一下就考不了试。
+
+**两级缓存最容易被问的地方是一致性，这里如实说**：卷面一旦发布就不再变（`PaperItem` 是只读快照），
+所以 L1 允许陈旧。代价写死在配置里：L1 的 TTL 是 **30 秒**，远短于 L2 的 600 秒 ——
+另一个实例发布新卷后，本实例最多 30 秒还读到旧卷。**如果哪天卷面要支持编辑，
+这个设计必须先改成广播失效，而不是把 TTL 调小**：调小只是把窗口变窄，不是消掉。
+另外 `maximumSize` 必须设，否则 L1 就是一个只进不出的 Map，等于内存泄漏。
 
 ### 5. 异步判分 + 降级（`grading/`）
 
@@ -248,7 +289,7 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 mvn test
 ```
 
-116 条，全部为单元测试 / Mockito 打桩测试，不依赖任何外部中间件：
+126 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
 
 | 测试类 | 条数 | 覆盖 |
 |---|---|---|
@@ -256,7 +297,7 @@ mvn test
 | `GradingServiceTest` | 6 | 总分累加、重复判分返回原分、未交卷不判、并发下回滚、题目被移出卷子 |
 | `GradingConsumerTest` | 5 | 正常重复静默、真失败计指标、异常不逃回 Broker |
 | `ExamSessionServiceTest` | 24 | 截止时间三种边界、未发布/未开考、重复进入（含已交卷后的状态）、并发进场撞键、超时不能存答案、卷外题不能存、重复交卷、投递失败降级、用时口径、越权访问 |
-| `PaperCacheTest` | 14 | TTL 抖动边界、空值哨兵、坏数据自删、抢锁、Redis 挂掉时的降级 |
+| `PaperCacheTest` | 19 | TTL 抖动边界、空值哨兵、坏数据自删、抢锁、Redis 挂掉时的降级、L1 命中不碰 Redis、空卷面也写 L1、Redis 命中回填 L1、evict 两层都清、多实例下 L1 的最长不一致窗口 |
 | `JwtUtilTest` | 6 | 签发/解析、角色与 userId 往返、过期、篡改、错密钥 |
 | `AuthServiceTest` | 6 | 登录不泄露用户名是否存在、角色白名单、建账号并发撞唯一键 |
 | `GradingSweepJobTest` | 3 | 漏判数进指标、**显式刷 0**、扫描失败不搞死调度线程 |
@@ -265,14 +306,27 @@ mvn test
 | `StateMachineTest` | 5 | 题型/考试/答卷三种枚举的迁移规则 |
 | `GlobalExceptionHandlerTest` | 14 | 异常到 HTTP 的翻译：业务异常状态码跟着 code 走（401/403/404/降级 400）、四类客户端错误不被吞成 500、500 不泄露堆栈 |
 | `PaperItemTest` | 5 | 卷面 DTO 无 `answer` 字段（字段反射 + 序列化双重检查）、该有的字段一个不少、判断题不发 options |
+| `MapperAliasTest` | 5 | 统计 SQL 的每个 `AS` 别名都能落到对应 DTO 的字段上（见下面第 1 条：这是唯一一个不连库却能抓到 SQL 列名错误的测试） |
 
 ## 八、已知限制（没做的，不装作做了）
 
-1. **SQL 不在 `mvn test` 里验证。** SQL 用了 MySQL 专有语法（JSON 列、
-   `INSERT ... AS new ON DUPLICATE KEY UPDATE`），H2 跑出来的"通过"是假的，所以没引入 H2。
-   真实 SQL 靠 `scripts/e2e.sh` 连真 MySQL 跑；CI 的 e2e job 会跑它
+1. **SQL 的`执行`不在 `mvn test` 里验证，但 SQL 的`列名`验证了。** SQL 用了 MySQL 专有语法
+   （JSON 列、`INSERT ... AS new ON DUPLICATE KEY UPDATE`），H2 跑出来的"通过"是假的，
+   所以没引入 H2。真实 SQL 靠 `scripts/e2e.sh` 连真 MySQL 跑；CI 的 e2e job 会跑它
    （见 .github/workflows/ci.yml），所以现在是**每次 push 都会验**，
    不再是"只在我机器上验过"。
+
+   不过有一条 SQL 错误**不需要连库就能抓**：列别名和 DTO 字段对不上。
+   MyBatis 的 `map-underscore-to-camel-case` 只负责把 snake_case 转驼峰，
+   如果 SQL 写 `COUNT(*) AS attempt_count` 而 DTO 字段叫 `attempt`，
+   两边对不上时**它不抛异常**，只是把 `attempt` 留成 null —— 接口 HTTP 200、
+   JSON 里有 data、每行的 `correctCount` 也是对的，只有页面上「作答人数」整列空白。
+   这个 bug 真实发生过，而且 e2e 脚本当时只断言了 `correctCount`，一直是绿的。
+
+   `MapperAliasTest` 就是为它写的：用反射读出每个 `@Select` 的别名文本，
+   按 MyBatis 的规则转成驼峰，再核对 DTO 上确实有那个字段。
+   它不执行 SQL、不连数据库，但能挡住这一类错误，而且是**全覆盖**的 ——
+   以后再加统计 SQL，别名写错会直接红在 `mvn test`。
 2. **判分失败不会自动重试 —— 但会被发现。** 消费者吞掉异常不抛回 Broker
    （抛回去会无限重投），所以失败不会自愈。要做对需要死信队列 + 重试计数。
 
@@ -297,10 +351,21 @@ mvn test
 6. **WebSocket 没做水平扩展**：连接存在单机内存里，多实例部署需要换成广播（Redis Pub/Sub 或 Broker）。
 7. **JWT 无法主动失效**，改密码或踢人需要额外的令牌黑名单。
 8. **没有文件上传/富文本题干**，题干是纯文本。
-9. **Dockerfile 没有在真实镜像上构建过。** 本机 Docker Desktop 配了一个
-   已经不存在的代理（127.0.0.1:7890），任何镜像都拉不下来，所以 `docker build`
-   只做到了"指令结构已校验"这一步。CI 的 docker job 会在能联网的 runner 上真跑一次。
-10. **迁移 V1 是事后基线，不是从一开始就有的。** V1 的内容等于原来的
+9. **Dockerfile 本机构建不了，是 CI 验的。** 本机 Docker Desktop 配了一个
+   已经不存在的代理（127.0.0.1:7890），任何镜像都拉不下来。CI 的 docker job
+   在能联网的 runner 上真跑：构建镜像 → 验证缺密钥拒绝启动 → 把 jar 抠出来
+   确认 `BOOT-INF/classes/static/index.html` 在里面。
+   **最后这条不是多余的**：前端产物不进 git，镜像里那份是 Dockerfile 的 node 阶段
+   现构建再 COPY 的，这一环断了的话镜像照样构建成功、容器照样起、健康检查照样绿，
+   只是打开是 404 —— 没有任何一条断言会碰到它。
+10. **前端没有自动化测试。** 没有 Vitest 单测、没有 Playwright 端到端，
+    页面是手动点过的。后端接口有 126 条单测 + e2e 脚本兜着，
+    但"页面上那个按钮点了会不会报错"目前只靠人看。
+11. **前端没做按需引入。** Element Plus 是整包引入的，主 chunk 1.1 MB（gzip 370 KB），
+    构建时有一条 `chunks are larger than 500 kB` 警告。做按需引入能砍掉大半，
+    但那是 `unplugin-vue-components` 加一堆配置的事，对现在的使用场景（内网、桌面浏览器）
+    不值得。**这条是取舍，不是遗漏。**
+12. **迁移 V1 是事后基线，不是从一开始就有的。** V1 的内容等于原来的
     `schema.sql`，所以从零建库、和按旧 schema.sql 建过的库，
     会走到不同的分支（一个真跑 V1，一个被 baseline 成 1）。两者最终结构一致，
     但 `flyway_schema_history` 里的记录不同 —— 这是"中途引入迁移工具"
@@ -340,4 +405,12 @@ scripts/
 ├── e2e_check.py                       接口校验 + 判分延迟实测
 ├── bench.sh                           取卷吞吐 A/B（Redis 开 / 停）
 └── bench_paper.py                     压测客户端（每线程长连接）
+
+web/                                   前端源码（Vue 3 + Vite）
+├── vite.config.js                     outDir 指向 ../src/main/resources/static
+└── src/
+    ├── api/http.js                    axios 实例 + 拦截器（拆壳、401 跳登录）
+    ├── router/index.js                hash 路由 + 登录/角色守卫
+    ├── stores/auth.js                 token 存 sessionStorage
+    └── views/                         学生端 4 页 / 老师端 3 页
 ```
