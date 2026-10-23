@@ -87,9 +87,17 @@ exam:
     # 30 秒是权衡：够快能及时发现，又不至于频繁打库（走 idx_record_deadline 前缀 status）。
     sweep-delay-ms: ${EXAM_GRADING_SWEEP_DELAY_MS:30000}
   cache:
-    paper-ttl-seconds: 600   # 卷面缓存 10 分钟，实际过期时刻带 ±20% 抖动
+    paper-ttl-seconds: 600   # L2（Redis）卷面缓存 10 分钟，实际过期时刻带 ±20% 抖动
     null-ttl-seconds: 60     # 空卷面（哨兵）缓存 1 分钟就够，防止穿透
     jitter-ratio: 0.2
+    # L1（本地 Caffeine）的存活时间。必须显著短于 L2 的 600 秒：
+    # 卷面本身发布后不变，但「另一个实例发布了新卷」这件事只能靠 L2 的 evict 传播，
+    # 本实例的 L1 收不到通知，只能等它自己过期。30 秒是「旧卷最多被看到 30 秒」
+    # 这个窗口的上界。如果将来卷面变成可编辑的，这里必须先改成广播失效。
+    local-ttl-seconds: 30
+    # 本地缓存条目上限。没有上界的本地缓存等于内存泄漏 ——
+    # 考试 id 会一直增长，迟早把堆吃光。
+    local-max-size: 200
   auto-submit:
     # 定时任务每 30 秒扫一次超时未交卷的答卷
     fixed-delay-ms: 30000

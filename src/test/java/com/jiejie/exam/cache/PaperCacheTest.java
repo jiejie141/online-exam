@@ -19,7 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,7 +40,8 @@ class PaperCacheTest {
     void setUp() {
         // 这里不 stub opsForValue()：纯函数那几个测试根本不碰 Redis，
         // 在 setUp 里统一 stub 会被 Mockito 的严格模式判成 UnnecessaryStubbing
-        cache = new PaperCache(redis, new ObjectMapper(), 600, 60, 0.2);
+        // 后两个参数是 L1（本地 Caffeine）的 TTL 与容量上限
+        cache = new PaperCache(redis, new ObjectMapper(), 600, 60, 0.2, 30, 200);
     }
 
     /** 需要走 Redis 的测试显式调用这个，把 opsForValue() 接上 */
@@ -177,5 +181,73 @@ class PaperCacheTest {
                 .thenThrow(new RuntimeException("connection refused"));
 
         assertNull(cache.tryLock(1L, 10));
+    }
+
+    // ---------------- L1 本地缓存（Caffeine） ----------------
+
+    @Test
+    void 写进L1之后同一实例再取不碰Redis() {
+        withRedis();
+
+        cache.put(1L, List.of(item(1L, "1+1=?")));
+
+        List<PaperItem> got = cache.get(1L);
+        assertEquals(1, got.size());
+        // L1 命中，根本不该再去问 Redis —— 这一跳就是本地缓存存在的全部意义
+        verify(ops, never()).get("exam:paper:1");
+    }
+
+    @Test
+    void 空卷面也写进L1否则穿透防护只在L2生效() {
+        withRedis();
+
+        cache.put(1L, List.of());
+
+        assertEquals(List.of(), cache.get(1L));
+        verify(ops, never()).get("exam:paper:1");
+    }
+
+    @Test
+    void Redis命中后回填L1第二次不再走Redis() throws Exception {
+        withRedis();
+        String json = new ObjectMapper().writeValueAsString(List.of(item(9L, "回填")));
+        when(ops.get("exam:paper:9")).thenReturn(json);
+
+        assertEquals(1, cache.get(9L).size());
+        assertEquals(1, cache.get(9L).size());
+
+        verify(ops, times(1)).get("exam:paper:9");
+    }
+
+    @Test
+    void evict必须同时清L1否则会读到已下线的旧卷面() {
+        withRedis();
+        cache.put(1L, List.of(item(1L, "旧题")));
+
+        cache.evict(1L);
+
+        // L2 也被清了，于是这一次取卷落空，交给调用方查库
+        when(ops.get("exam:paper:1")).thenReturn(null);
+        assertNull(cache.get(1L));
+        verify(redis).delete("exam:paper:1");
+    }
+
+    @Test
+    void 两个实例各自持有L1时新发布的卷子最多在localTtl后可见() throws Exception {
+        // 用两个 PaperCache 模拟两个应用实例共用同一个 Redis
+        withRedis();
+        PaperCache instanceB = new PaperCache(redis, new ObjectMapper(), 600, 60, 0.2, 30, 200);
+
+        cache.put(7L, List.of(item(1L, "第一版")));
+
+        // B 第一次取卷会去读 Redis（A 刚写进去的），之后也进了 B 的 L1
+        String firstVersion = new ObjectMapper().writeValueAsString(List.of(item(1L, "第一版")));
+        when(ops.get("exam:paper:7")).thenReturn(firstVersion);
+        assertEquals("第一版", instanceB.get(7L).get(0).getStem());
+
+        // A 发布新卷并 evict，但 B 的 L1 收不到通知 —— 这正是 L1 的已知代价：
+        // 在 local-ttl-seconds 窗口内 B 仍会返回旧卷面。
+        cache.evict(7L);
+        assertEquals("第一版", instanceB.get(7L).get(0).getStem());
     }
 }

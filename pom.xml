@@ -93,6 +93,16 @@
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-pool2</artifactId>
     </dependency>
+    <!-- 本地一级缓存（L1）。Redis 是 L2。
+         为什么还要 L1：开考瞬间几百人拉同一份卷子，Redis 网络往返（~0.2ms）
+         乘以几百并发就是可观的 QPS 与连接占用。卷子在发布后不可变，
+         所以本地缓存不存在"读到旧数据"的风险，只需要一个短 TTL 兜住
+         「另一个实例刚发布/淘汰」这种极小概率的窗口。
+         版本由 spring-boot-dependencies 管理，不写 version。 -->
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.projectlombok</groupId>
       <artifactId>lombok</artifactId>
