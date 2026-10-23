@@ -32,3 +32,10 @@ Thumbs.db
 # 文档与脚本不进镜像：运行时一行都不需要
 docs/
 *.md
+
+# 前端：源码要进（Dockerfile 里有独立的 node 阶段去 build 它），
+# 但 node_modules 和本地已构建的产物不进 ——
+# 前者几百 MB 且必须在镜像里按锁文件重装，后者会被 node 阶段重新生成，
+# 带进来只会让「本地忘了 rebuild」的旧页面悄悄混进镜像。
+web/node_modules/
+src/main/resources/static/

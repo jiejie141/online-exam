@@ -2,7 +2,7 @@
 # CI：每次 push / PR 自动验证
 #
 # 分三个 job，故意拆开 —— 失败时能一眼看出是哪一类问题：
-#   unit  : mvn test（116 条单元测试，纯内存，不依赖任何中间件）
+#   unit  : mvn test（126 条单元测试，纯内存，不依赖任何中间件）
 #   e2e   : 起真 MySQL / Redis / RabbitMQ，跑 scripts/e2e.sh 与 e2e_check.py
 #   docker: 镜像能不能构建出来
 #
@@ -62,7 +62,7 @@ jobs:
         run: mvn -B -q dependency:list -DincludeScope=test -DoutputFile=/tmp/deps.txt && head -40 /tmp/deps.txt || true
 
       - name: mvn test
-        # 这 116 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
+        # 这 126 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
         # 因此严格来说不需要密钥。显式给一个是为了：
         #   1. 万一以后有人加了 @SpringBootTest，不会因为「CI 环境没设变量」而红；
         #   2. 让「密钥从哪来」在 workflow 里是可见的，而不是隐含的。
@@ -222,6 +222,30 @@ jobs:
 
       - name: 构建镜像
         run: docker build -t online-exam:ci .
+
+      # 只 build 成功不代表镜像里有页面。
+      #
+      # 前端产物 src/main/resources/static/ 不进 git，是 Dockerfile 里
+      # 那个 node 阶段现构建再 COPY 进 maven 阶段的。这条链路任何一环断掉
+      # （忘了 COPY、outDir 路径对不上、npm run build 静默没产出），
+      # 结果都是：镜像构建成功、容器能起、/actuator/health 也绿，
+      # 但浏览器打开是 404 —— 而没有任何一条断言会发现它。
+      #
+      # 所以这里直接把 jar 从镜像里抠出来，检查里面有没有那个文件。
+      # 用 docker create + docker cp 而不是起容器：不需要数据库、
+      # 不需要密钥、也不会因为 fail-closed 而提前退出。
+      - name: 验证镜像里确实打进了前端页面
+        run: |
+          set -e
+          cid=$(docker create online-exam:ci)
+          docker cp "$cid:/app/app.jar" /tmp/app.jar
+          docker rm -f "$cid" > /dev/null
+          if unzip -l /tmp/app.jar | grep -q 'BOOT-INF/classes/static/index.html'; then
+            echo '::notice::镜像内含前端页面（BOOT-INF/classes/static/index.html）'
+          else
+            echo '::error::镜像里没有 static/index.html —— 前端产物没被打进 jar'
+            exit 1
+          fi
 
       # 只 build 不够：镜像里可能缺运行时需要的东西。
       # 这里起一个容器、确认它是**因为缺 EXAM_JWT_SECRET 而拒绝启动**，

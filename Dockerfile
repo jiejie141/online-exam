@@ -5,6 +5,33 @@
 # 而运行时一行都不需要它。多阶段让最终镜像只包含 JRE + jar。
 # ===========================================================================
 
+# ---- 前端构建阶段 ---------------------------------------------------------
+# 为什么要单独一个阶段，而不是在 maven 阶段里装 node：
+#   Spring Boot 只会把 src/main/resources/static/ 打进 jar，而这个目录是
+#   npm run build 的产物、不进 git（见 .gitignore）。如果镜像构建跳过它，
+#   打出来的 jar 里就没有页面 —— 容器能起来、/actuator/health 也绿，
+#   但浏览器打开是 404。这类「构建通过、功能缺失」的缺口最容易被漏掉。
+#
+# 为什么 WORKDIR 是 /build/web 而不是 /web：
+#   vite.config.js 里 outDir 写的是 '../src/main/resources/static'，
+#   是相对 web/ 的。把工作目录摆成 /build/web，这个相对路径就正好落在
+#   /build/src/main/resources/static —— 与下面 maven 阶段的目录结构一致，
+#   于是 COPY --from=frontend 拿到的就是它该在的位置，
+#   不需要为容器改一份 vite 配置（改了就会出现「本地能 build、容器不能」）。
+FROM node:20-alpine AS frontend
+WORKDIR /build/web
+
+# 先只拷锁文件再 npm ci：与下面 maven 阶段先拷 pom.xml 是同一个理由 ——
+# 改业务代码不会让依赖层失效。
+# 用 npm ci 而不是 npm install：ci 严格按 package-lock.json 装，
+# 装出来的版本与本地、与 CI 完全一致；install 可能悄悄升级次要版本，
+# 而「镜像里的前端和本地跑的不是同一份代码」这种问题极难排查。
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web ./
+RUN npm run build
+
 # ---- 构建阶段 -------------------------------------------------------------
 FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /build
@@ -19,6 +46,14 @@ COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 
 COPY src ./src
+
+# 把前端阶段构建出来的页面放进 static/，再打包。
+# 顺序不能反：mvn package 会把当时 static/ 里的东西打进 jar，
+# 所以 COPY --from=frontend 必须在它前面。
+# 注意 .dockerignore 里排除了 src/main/resources/static/，
+# 所以这里拿到的**只有**镜像内构建出来的那一份，
+# 不会混进本地遗留的旧产物。
+COPY --from=frontend /build/src/main/resources/static ./src/main/resources/static
 # 跳过测试：CI 里 unit job 已经单独跑过一遍了，
 # 在构建阶段再跑一次只是让镜像变慢，不会多发现任何问题。
 RUN mvn -B -q clean package -DskipTests
