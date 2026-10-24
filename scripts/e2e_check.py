@@ -209,6 +209,17 @@ def main():
     s2 = login(api, "s002", "student123")
     st, body = api.call("GET", f"/api/records/{record_id}/result", token=s2)
     check("别人查不到我的答卷（403）", body.get("code") == 403, f"code={body.get('code')}")
+    # 卷面比成绩单更敏感：成绩单泄露的是一个人的分数，卷面泄露的是整场考试的题。
+    # s002 从没进过这场考试，所以这里必须 403 —— 而不能像以前那样
+    # 只要登录着、只要能猜到 examId 就把题拿走。
+    st, body = api.call("GET", f"/api/exams/{exam_id}/paper", token=s2)
+    check("没进过这场考试就取不到卷面（403）", body.get("code") == 403,
+          f"code={body.get('code')}")
+    # 反过来要确认这道闸门没有误伤：s001 是真进过场的，[4] 里能取到卷面，
+    # 这里再取一次，证明"加校验"没有变成"谁都取不到"。
+    st, body = api.call("GET", f"/api/exams/{exam_id}/paper", token=ss)
+    check("进过场的学生仍然能取卷面", body.get("code") == 0 and len(body.get("data") or []) == 10,
+          f"code={body.get('code')}")
 
     print("\n[9] 老师端统计")
     st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=tt)

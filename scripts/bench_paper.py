@@ -44,6 +44,25 @@ def login(base, username, password):
         return json.loads(r.read().decode())["data"]["token"]
 
 
+def enter_exam(base, token, exam_id):
+    """先进入考试，再压卷面接口。
+
+    取卷面现在要求"你确实进过这场考试"（见 ExamSessionService.paperForStudent），
+    而压测打的就是那个接口。不先 start 的话，300 次预热全是 403，
+    打出来的 QPS 是 0 —— 而且看起来像"服务端崩了"。
+    start 是幂等的：已经进过就返回原来那份答卷，不会重开。
+    """
+    req = urllib.request.Request(base + f"/api/exams/{exam_id}/start", method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer " + token)
+    req.data = b"{}"
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body = json.loads(r.read().decode())
+    if body.get("code") != 0:
+        raise SystemExit(f"进入考试失败（exam_id={exam_id}）：{body.get('message')}\n"
+                         f"先确认这场考试是已发布状态，并且库里灌过 seed.sql。")
+
+
 class Client:
     """每个线程一条长连接。断了自己重连，不让单次错误终止整个线程。"""
 
@@ -108,6 +127,7 @@ def main():
     base = args.base.rstrip("/")
     path = f"/api/exams/{args.exam_id}/paper"
     token = login(base, "s001", "student123")
+    enter_exam(base, token, args.exam_id)
 
     # 预热：填缓存 + 让 JIT 把热点路径编译掉。
     # 不预热测出来的数字，面试现场复现不出来 —— 这个亏吃过一次。

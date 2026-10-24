@@ -17,6 +17,13 @@ target/
 .DS_Store
 Thumbs.db
 
+### Python 脚本的字节码缓存 ###
+# scripts/*.py 是被 e2e 和压测直接调用的，跑一次就会在 __pycache__ 里
+# 落一份 .pyc。它是本机解释器版本的产物（文件名带 cpython-3xx），
+# 不该跟着仓库走 —— 换台机器就是无效文件，还会在 diff 里冒出来。
+__pycache__/
+*.py[cod]
+
 ### 本地配置 ###
 application-local.yml
 *.log

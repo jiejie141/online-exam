@@ -11,6 +11,7 @@ import com.jiejie.exam.web.BusinessException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -76,16 +77,29 @@ public class ExamService {
         if (!ExamStatus.DRAFT.code().equals(exam.getStatus())) {
             throw new BusinessException("只有草稿状态的考试才能改卷子");
         }
-        int added = 0;
-        int seq = currentMaxSeq(examId);
+        // 先全部校验、再全部写入。这个方法没有 @Transactional，
+        // 边校验边写的话，列表中间那道"别人的题"会把前几道已经写进库的题留下来，
+        // 卷子变成改了一半的半成品，而调用方只看到一个 403。
+        List<Question> questions = new ArrayList<>();
         for (Long questionId : questionIds) {
             Question q = questionMapper.selectById(questionId);
             if (q == null) {
                 throw new BusinessException("题目不存在: " + questionId);
             }
+            // 题目也有归属。只判「考试是你的」不够：题库里别人的题可以被
+            // 悄悄塞进自己的卷子，学生考完看到的是一道你没出过、也看不到答案的题。
+            // 同样 fail-closed：created_by 为空的题目不让进卷子。
+            if (!teacherId.equals(q.getCreatedBy())) {
+                throw new BusinessException(403, "不能把别人的题目加进自己的卷子: " + questionId);
+            }
+            questions.add(q);
+        }
+        int added = 0;
+        int seq = currentMaxSeq(examId);
+        for (Question q : questions) {
             ExamQuestion eq = new ExamQuestion();
             eq.setExamId(examId);
-            eq.setQuestionId(questionId);
+            eq.setQuestionId(q.getId());
             eq.setScore(score != null ? score : q.getScore());
             eq.setSeq(++seq);
             try {

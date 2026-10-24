@@ -53,10 +53,16 @@ public class StudentExamController {
         return ApiResponse.ok(sessionService.start(examId, me.userId()));
     }
 
-    /** 取卷面。不含正确答案 —— 见 PaperItem 的说明 */
+    /**
+     * 取卷面。不含正确答案 —— 见 PaperItem 的说明。
+     *
+     * <p>必须带上当前用户：这个接口原来只看 examId，任何登录用户猜一个 id
+     * 就能把别人的、甚至还没开考的那场卷子整份拿走。现在要能证明自己进过这场考试。
+     */
     @GetMapping("/exams/{examId}/paper")
-    public ApiResponse<List<PaperItem>> paper(@PathVariable Long examId) {
-        return ApiResponse.ok(sessionService.paper(examId));
+    public ApiResponse<List<PaperItem>> paper(@PathVariable Long examId,
+                                              @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(sessionService.paperForStudent(examId, me.userId()));
     }
 
     /** 保存一道题的作答。前端每答一题就调一次，重复调用是覆盖而不是新增 */

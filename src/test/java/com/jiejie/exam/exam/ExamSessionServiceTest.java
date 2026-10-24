@@ -430,7 +430,7 @@ class ExamSessionServiceTest {
         item.setId(1L);
         when(examQuestionMapper.selectPaper(1L)).thenReturn(List.of(item));
 
-        List<PaperItem> paper = service.paper(1L);
+        List<PaperItem> paper = service.loadPaper(1L);
 
         assertEquals(1, paper.size());
         verify(paperCache).put(1L, List.of(item));
@@ -443,7 +443,7 @@ class ExamSessionServiceTest {
         when(paperCache.tryLock(1L, 10)).thenReturn(null);
         when(examQuestionMapper.selectPaper(1L)).thenReturn(List.of());
 
-        assertEquals(List.of(), service.paper(1L));
+        assertEquals(List.of(), service.loadPaper(1L));
     }
 
     @Test

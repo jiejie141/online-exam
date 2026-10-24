@@ -151,6 +151,58 @@ class ExamServiceTest {
         verify(paperCache, never()).evict(any());
     }
 
+    private static Question questionOwnedBy(Long createdBy, long id) {
+        Question q = new Question();
+        q.setId(id);
+        q.setSubject("Java");
+        q.setType(QuestionType.SINGLE.code());
+        q.setStem("下列哪个是接口？");
+        q.setAnswer("A");
+        q.setScore(10);
+        q.setCreatedBy(createdBy);
+        return q;
+    }
+
+    @Test
+    void 不能把别人的题目加进自己的卷子() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(questionMapper.selectById(9L)).thenReturn(questionOwnedBy(OTHER_TEACHER, 9L));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.addQuestions(EXAM_ID, List.of(9L), null, TEACHER));
+
+        assertEquals(403, e.code());
+        // 卷子是自己的、题目不是自己的 —— 只判前者会放它进来
+        verify(examQuestionMapper, never()).insert(any(ExamQuestion.class));
+    }
+
+    @Test
+    void 列表里夹着别人的题目就一道都不写() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(questionMapper.selectById(1L)).thenReturn(questionOwnedBy(TEACHER, 1L));
+        when(questionMapper.selectById(9L)).thenReturn(questionOwnedBy(OTHER_TEACHER, 9L));
+
+        assertThrows(BusinessException.class,
+                () -> examService.addQuestions(EXAM_ID, List.of(1L, 9L), null, TEACHER));
+
+        // 这个方法没有事务，能不能"全不写"完全取决于先校验后写入的顺序。
+        // 边校验边写的话，1 号题已经被写进去了，卷子成了改一半的半成品。
+        verify(examQuestionMapper, never()).insert(any(ExamQuestion.class));
+    }
+
+    @Test
+    void 自己的题目正常加进卷子() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(questionMapper.selectById(1L)).thenReturn(questionOwnedBy(TEACHER, 1L));
+        when(examQuestionMapper.insert(any(ExamQuestion.class))).thenReturn(1);
+
+        assertEquals(1, examService.addQuestions(EXAM_ID, List.of(1L), 20, TEACHER));
+
+        ArgumentCaptor<ExamQuestion> captor = ArgumentCaptor.forClass(ExamQuestion.class);
+        verify(examQuestionMapper).insert(captor.capture());
+        assertEquals(20, captor.getValue().getScore());  // 手动指定的分值优先于题目默认分值
+    }
+
     @Test
     void 没有出题老师的题目拒绝入库() {
         Question q = new Question();

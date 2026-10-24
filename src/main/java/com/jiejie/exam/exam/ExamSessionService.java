@@ -123,7 +123,7 @@ public class ExamSessionService {
         ExamRecord existing = recordMapper.findByExamAndUser(examId, userId);
         if (existing != null) {
             return new StartResult(existing.getId(), examId, existing.getStatus(),
-                    existing.getDeadlineAt(), now, paper(examId));
+                    existing.getDeadlineAt(), now, loadPaper(examId));
         }
 
         LocalDateTime deadline = computeDeadline(now, exam.getDurationMinutes(), exam.getEndAt());
@@ -143,10 +143,10 @@ public class ExamSessionService {
                 throw e;
             }
             return new StartResult(again.getId(), examId, again.getStatus(),
-                    again.getDeadlineAt(), now, paper(examId));
+                    again.getDeadlineAt(), now, loadPaper(examId));
         }
         return new StartResult(record.getId(), examId, RecordStatus.ONGOING.code(),
-                deadline, now, paper(examId));
+                deadline, now, loadPaper(examId));
     }
 
     /**
@@ -162,7 +162,38 @@ public class ExamSessionService {
 
     // ---------------- 取卷面 ----------------
 
-    public List<PaperItem> paper(Long examId) {
+    /**
+     * 学生自己取卷面：<b>先证明他确实进过这场考试</b>，再给卷子。
+     *
+     * <p>原来这里只有一个 {@code paper(examId)}，谁登录着都能传一个 examId 把卷子拿走 ——
+     * 包括还没开考的那场（考试计划明天上午开，今天就能把题看完）。
+     * 这不是「拿到别人的数据」那么轻，它直接毁掉一场考试。
+     *
+     * <p>判据用「有没有自己的答卷」而不是「考试是不是 published + 在时间窗内」：
+     * 答卷只有在 {@code start()} 通过那三道校验之后才可能存在，
+     * 所以存在一份自己的答卷，等价于「他当时合法地进场了」。
+     * 这样也不必再抄一遍时间窗判断，少一处会写歪的地方。
+     *
+     * <p>不区分「考试不存在」和「你没进过」：两种都回 403 同一条消息。
+     * 分开回答等于送攻击者一个探测 examId 有没有效的接口，
+     * 和 {@link ExamAccess} 那边的口径一致。
+     */
+    public List<PaperItem> paperForStudent(Long examId, Long userId) {
+        ExamRecord record = recordMapper.findByExamAndUser(examId, userId);
+        if (record == null) {
+            throw new BusinessException(403, "还没有进入这场考试，不能取卷面: " + examId);
+        }
+        return loadPaper(examId);
+    }
+
+    /**
+     * 真正读卷面（带缓存）。<b>不做权限判断</b> —— 调用方必须先确认调用者有权看。
+     *
+     * <p>包级可见而不是 private：单测要直接钉缓存行为（命中 / 未命中 / 抢不到锁）。
+     * 对外只暴露 {@link #paperForStudent}，因为 start / result / saveAnswer
+     * 都已经各自校验过身份了，它们走这条内部路径。
+     */
+    List<PaperItem> loadPaper(Long examId) {
         List<PaperItem> cached = paperCache.get(examId);
         if (cached != null) {
             return cached;
@@ -253,7 +284,7 @@ public class ExamSessionService {
             throw new BusinessException("还没判完，请稍后再看");
         }
         return new ExamResultView(recordId, record.getExamId(), record.getScore(), record.getStatus(),
-                paper(record.getExamId()), answerMapper.listByRecord(recordId));
+                loadPaper(record.getExamId()), answerMapper.listByRecord(recordId));
     }
 
     // ---------------- 内部 ----------------
@@ -271,6 +302,6 @@ public class ExamSessionService {
     }
 
     private Set<Long> paperQuestionIds(Long examId) {
-        return paper(examId).stream().map(PaperItem::getId).collect(Collectors.toSet());
+        return loadPaper(examId).stream().map(PaperItem::getId).collect(Collectors.toSet());
     }
 }
