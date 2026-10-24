@@ -38,7 +38,6 @@ import java.util.stream.Collectors;
 @Service
 public class ExamSessionService {
 
-    /** 进入考试的结果。serverTime 是给学生端对齐时钟用的 */
     /**
      * 进入考试的结果。serverTime 是给学生端对齐时钟用的。
      *
