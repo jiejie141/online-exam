@@ -12,6 +12,31 @@ LOG="target/e2e-app.log"
 
 cd "$ROOT"
 
+# 校验工具先行探测（fail-fast）：
+# Windows 上 `python` 可能命中 Microsoft Store 的「应用执行别名」存根 ——
+# 它退出码非 0 且一行输出都没有。实际踩到：e2e 一路绿灯走到第 5 步报
+# "校验失败"，e2e-check.log 却是空的，排查方向被带偏到接口和应用上，
+# 实际是校验脚本从未执行。存根机器上通常还有 py 启动器，依次回退。
+PYTHON_BIN=""
+if python -c "pass" >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+elif py -3 -c "pass" >/dev/null 2>&1; then
+  PYTHON_BIN="py -3"
+  echo "（python 不可用，改用 py 启动器）"
+else
+  echo "!! 找不到可用的 Python，接口校验将无法执行，在这里停下。"
+  echo "   Windows 常见原因：系统开了 python.exe 应用执行别名（商店存根），去"
+  echo "   设置 > 应用 > 高级应用设置 > 应用执行别名 里关掉，或安装 Python 后重试。"
+  exit 1
+fi
+
+# JWT 密钥要在 compose up **之前**导出：compose 会校验所有 service 的变量插值，
+# 哪怕引用它的 app service 属于未启用的 profile —— 放在后面的话，每次起依赖
+# 都会打一条 "The EXAM_JWT_SECRET variable is not set" 的警告。
+# 用固定值而不是随机值，是为了让"失败重跑"的结果可比较；
+# 它只在本地 8099 端口上活几分钟，不承担任何真实安全性。
+export EXAM_JWT_SECRET="${EXAM_JWT_SECRET:-e2e-only-local-secret-not-for-production-0123456789abcdef}"
+
 echo "== 1/6 起依赖 =="
 docker compose up -d
 
@@ -72,10 +97,7 @@ docker exec exam-mysql mysql -uroot -proot -e \
 
 echo "== 4/6 起服务（端口 ${PORT}）=="
 mkdir -p target
-# JWT 密钥：应用不再内置默认值，不设就起不来（见 JwtUtil 的启动校验）。
-# 这里用固定值而不是随机值，是为了让"失败重跑"的结果可比较；
-# 它只在本地 8099 端口上活几分钟，不承担任何真实安全性。
-export EXAM_JWT_SECRET="${EXAM_JWT_SECRET:-e2e-only-local-secret-not-for-production-0123456789abcdef}"
+# JWT 密钥已在脚本开头（compose up 之前）导出，应用不设密钥起不来（见 JwtUtil）。
 # 显式指定端口：某些环境会注入 SERVER__PORT 把 server.port 顶掉
 # 去掉 -q：它会把 Maven 的 INFO 一起压掉，而启动失败的原因经常就在
 # 被压掉的那几行里（CI 上就是只拿到一段 [ERROR] 套话，看不到真正的原因）。
@@ -122,14 +144,22 @@ echo "== 5/6 接口校验 =="
 # Windows 控制台默认 GBK，不设这个中文题干会打成一串转义符
 # tee 一份到文件：失败时 CI 的注释（annotation）要从这里取摘要，
 # 匿名看 job 页面是拿不到日志正文的（下载接口要认证）。
-PYTHONIOENCODING=utf-8 python scripts/e2e_check.py --base "$BASE" 2>&1 | tee target/e2e-check.log
+PYTHONIOENCODING=utf-8 $PYTHON_BIN scripts/e2e_check.py --base "$BASE" 2>&1 | tee target/e2e-check.log
 # 上面是管道，$? 会变成 tee 的退出码 —— 用 PIPESTATUS 拿 python 的。
 # 这一点和 ci.yml 里那个 docker run 是同一个坑，别改成 $?。
 CHECK_RC=${PIPESTATUS[0]}
 
 echo "== 6/6 收尾 =="
 if [ "$CHECK_RC" -ne 0 ]; then
-  echo "!! 校验失败，服务日志尾部："
-  tail -40 "$LOG"
+  # 先分清「校验失败了」和「校验根本没跑成」：日志为空说明 python 进程
+  # 没有产出任何东西（工具缺失/被存根截胡/当场崩溃），这时去翻应用日志
+  # 只会白费功夫 —— 两者要用不同的方式修。
+  if [ ! -s target/e2e-check.log ]; then
+    echo "!! 校验日志为空：校验脚本没有真正执行（不是接口校验失败）。"
+    echo "   检查 PYTHON_BIN=$PYTHON_BIN 是否指向真实解释器。"
+  else
+    echo "!! 校验失败，服务日志尾部："
+    tail -40 "$LOG"
+  fi
 fi
 exit $CHECK_RC
