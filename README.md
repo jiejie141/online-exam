@@ -508,7 +508,7 @@ scripts/
 ├── bench.sh                           取卷吞吐 A/B（Redis 开 / 停）
 └── bench_paper.py                     压测客户端（每线程长连接）
 
-web/                                   前端源码（Vue 3 + Vite，24 个源文件 + 6 个测试文件，共 30 个 .js/.vue/.css）
+web/                                   前端源码（Vue 3 + Vite，20 个源文件 + 3 个测试文件 + 1 个测试 setup，共 24 个 .js/.vue/.css）
 ├── vite.config.js                     outDir 指向 ../src/main/resources/static；
 │                                      自写 Element Plus 深路径 resolver + vitest 配置
 └── src/
