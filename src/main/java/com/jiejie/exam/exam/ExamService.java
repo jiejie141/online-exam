@@ -1,6 +1,9 @@
 package com.jiejie.exam.exam;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.jiejie.exam.cache.PaperCache;
+import com.jiejie.exam.domain.dto.PageResult;
 import com.jiejie.exam.domain.entity.Exam;
 import com.jiejie.exam.domain.entity.ExamQuestion;
 import com.jiejie.exam.domain.entity.Question;
@@ -154,10 +157,13 @@ public class ExamService {
      * <p>原来没有 created_by 条件，任何老师都能在列表里看到别人的考试，
      * 点进去还能继续操作 —— 归属校验形同虚设。
      */
-    public List<Exam> listExams(Long teacherId) {
-        return examMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Exam>()
-                .eq(Exam::getCreatedBy, teacherId)
-                .orderByDesc(Exam::getStartAt));
+    public PageResult<Exam> listExams(Long teacherId, long page, long size) {
+        Page<Exam> p = new Page<>(page, size);
+        IPage<Exam> result = examMapper.selectPage(p,
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Exam>()
+                        .eq(Exam::getCreatedBy, teacherId)
+                        .orderByDesc(Exam::getStartAt));
+        return new PageResult<>(result.getRecords(), result.getTotal(), result.getCurrent(), result.getSize());
     }
 
     /**
@@ -169,7 +175,8 @@ public class ExamService {
      * <p>同样按 created_by 过滤：题库也是老师的私有资源，
      * 不加这一条，A 老师能看到 B 老师出的题和答案。
      */
-    public List<Question> listQuestions(String subject, String type, Long teacherId) {
+    public PageResult<Question> listQuestions(String subject, String type, Long teacherId,
+                                             long page, long size) {
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Question> q =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
         q.eq(Question::getCreatedBy, teacherId);
@@ -180,7 +187,8 @@ public class ExamService {
             q.eq(Question::getType, type);
         }
         q.orderByDesc(Question::getId);
-        return questionMapper.selectList(q);
+        IPage<Question> result = questionMapper.selectPage(new Page<>(page, size), q);
+        return new PageResult<>(result.getRecords(), result.getTotal(), result.getCurrent(), result.getSize());
     }
 
     public Long createQuestion(Question question) {

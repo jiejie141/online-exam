@@ -1,6 +1,7 @@
 package com.jiejie.exam.web;
 
 import com.jiejie.exam.domain.dto.ExamScoreStats;
+import com.jiejie.exam.domain.dto.PageResult;
 import com.jiejie.exam.domain.dto.QuestionAccuracy;
 import com.jiejie.exam.domain.dto.ScoreBucket;
 import com.jiejie.exam.domain.entity.Exam;
@@ -66,18 +67,50 @@ public class TeacherController {
         return ApiResponse.ok(examService.createQuestion(q));
     }
 
-    /** 老师端考试列表（含草稿，只含自己建的）—— 前端需要它才能选一场考试去看统计 / 发布 / 结束 */
+    /**
+     * 老师端考试列表（含草稿，只含自己建的）—— 前端需要它才能选一场考试去看统计 / 发布 / 结束。
+     *
+     * <p>分页返回 {@code {items,total,page,size}}。不传 page/size 时给 1/20：
+     * 老师手上通常就几场考试，默认一页装得下；真要多了也不至于一次全拉回来。
+     *
+     * <p>page 从 1 开始（不是 0）。传 0 或负数按 1 处理 —— 与其 400 让前端去猜，
+     * 不如夹到合法区间，翻页这种事不该成为一个错误来源。
+     */
     @GetMapping("/exams")
-    public ApiResponse<List<Exam>> listExams(@AuthenticationPrincipal Principal me) {
-        return ApiResponse.ok(examService.listExams(me.userId()));
+    public ApiResponse<PageResult<Exam>> listExams(@RequestParam(defaultValue = "1") long page,
+                                                   @RequestParam(defaultValue = "20") long size,
+                                                   @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(examService.listExams(me.userId(), clampPage(page), clampSize(size)));
     }
 
-    /** 题库列表（只含自己出的题）。subject / type 可选，不传就是全部 */
+    /** 题库列表（只含自己出的题）。subject / type 可选，不传就是全部。同样分页 */
     @GetMapping("/questions")
-    public ApiResponse<List<Question>> listQuestions(@RequestParam(required = false) String subject,
-                                                     @RequestParam(required = false) String type,
-                                                     @AuthenticationPrincipal Principal me) {
-        return ApiResponse.ok(examService.listQuestions(subject, type, me.userId()));
+    public ApiResponse<PageResult<Question>> listQuestions(@RequestParam(required = false) String subject,
+                                                           @RequestParam(required = false) String type,
+                                                           @RequestParam(defaultValue = "1") long page,
+                                                           @RequestParam(defaultValue = "20") long size,
+                                                           @AuthenticationPrincipal Principal me) {
+        return ApiResponse.ok(examService.listQuestions(subject, type, me.userId(),
+                clampPage(page), clampSize(size)));
+    }
+
+    /** 页码下限 1。上限不设：总数摆在那，翻到 10 万页也只会返回空列表 */
+    private static long clampPage(long page) {
+        return page < 1 ? 1 : page;
+    }
+
+    /**
+     * 每页条数夹在 1..100。
+     *
+     * <p>上限 100 和 {@code MybatisPlusConfig} 里 {@code setMaxLimit(100)} 是同一个数，
+     * 这里显式夹一遍是为了让「前端传 size=100000」变成 100 而不是被插件静默改写 ——
+     * 后者返回的 size 字段会和请求对不上，前端算页数就会错。
+     */
+    private static long clampSize(long size) {
+        if (size < 1) {
+            return 20;
+        }
+        return Math.min(size, 100);
     }
 
     @PostMapping("/exams")

@@ -63,7 +63,9 @@ async function load() {
     const params = {};
     if (filter.subject) params.subject = filter.subject;
     if (filter.type) params.type = filter.type;
-    questions.value = await listQuestions(params);
+    // 分页接口返回 { items, total, page, size }；题库页只展示第一页
+    const page = await listQuestions(params);
+    questions.value = page.items;
   } catch (e) {
     loadError.value = e.message;
   } finally {

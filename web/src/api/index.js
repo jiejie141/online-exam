@@ -29,7 +29,9 @@ export const submitExam = (recordId) => http.post(`/records/${recordId}/submit`)
 export const getResult = (recordId) => http.get(`/records/${recordId}/result`);
 
 // ---------------- 老师端 ----------------
-export const listExams = () => http.get('/teacher/exams');
+// 分页接口，返回 { items, total, page, size }（不是裸数组）。
+// 不传 page/size 时后端给 1/20 —— 老师手上通常就几场考试，一页装得下。
+export const listExams = (params) => http.get('/teacher/exams', { params });
 
 export const createExam = (payload) => http.post('/teacher/exams', payload);
 

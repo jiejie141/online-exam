@@ -261,9 +261,11 @@ def main():
                    "realName": "另一位老师", "role": "teacher"})
     t2 = login(api, "t002", "teacher123")
     st, body = api.call("GET", "/api/teacher/exams", token=t2)
+    # 列表接口是分页的，返回 { items, total, page, size }
+    t2_exams = (body.get("data") or {}).get("items") or []
     check("新老师看不到别人建的考试列表",
-          all(e["id"] != exam_id for e in (body.get("data") or [])),
-          f"{len(body.get('data') or [])} 场")
+          all(e["id"] != exam_id for e in t2_exams),
+          f"{len(t2_exams)} 场")
     st, body = api.call("GET", f"/api/teacher/exams/{exam_id}/stats", token=t2)
     check("新老师查不到别人考试的成绩（403）", body.get("code") == 403,
           f"code={body.get('code')}")

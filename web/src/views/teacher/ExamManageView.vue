@@ -50,7 +50,9 @@ async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    exams.value = await listExams();
+    // 接口是分页的，返回 { items, total, page, size }；这一页只展示第一页
+    const page = await listExams();
+    exams.value = page.items;
   } catch (e) {
     loadError.value = e.message;
   } finally {
@@ -60,7 +62,8 @@ async function load() {
 
 async function loadQuestions() {
   try {
-    questions.value = await listQuestions();
+    const page = await listQuestions();
+    questions.value = page.items;
   } catch (e) {
     ElMessage.error(e.message);
   }

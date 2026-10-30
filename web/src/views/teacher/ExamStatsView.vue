@@ -64,11 +64,13 @@ async function load() {
       getProgress(examId),
       listExams()
     ]);
+    // listExams 是分页接口，返回 { items, ... }；这里只用它找标题
+    const examItems = (exams && exams.items) || [];
     stats.value = s;
     distribution.value = d || [];
     accuracy.value = a || [];
     progress.value = p;
-    const found = (exams || []).find((e) => e.id === examId);
+    const found = examItems.find((e) => e.id === examId);
     examTitle.value = found ? found.title : `考试 #${examId}`;
   } catch (e) {
     loadError.value = e.message;
