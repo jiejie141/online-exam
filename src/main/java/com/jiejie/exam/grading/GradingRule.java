@@ -76,8 +76,12 @@ public final class GradingRule {
     /**
      * 归一化：去掉空白与分隔符、统一大写、排序。
      * 学生端可能提交 "A,B" / "a b" / "BA" 等多种形态，都必须落到同一个答案上。
+     *
+     * <p>公开是为了让出题校验（{@code QuestionRule}）复用同一套规则：
+     * 如果入库时按一种规则判"答案合法"、判分时按另一种规则比对，
+     * 就会造出"入库通过、但全班都答不对"的题 —— 而且它不会报错。
      */
-    static String normalize(String answer) {
+    public static String normalize(String answer) {
         StringBuilder sb = new StringBuilder();
         for (String s : toSet(answer)) {
             sb.append(s);

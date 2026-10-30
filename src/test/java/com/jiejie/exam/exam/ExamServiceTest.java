@@ -152,12 +152,19 @@ class ExamServiceTest {
         verify(paperCache, never()).evict(any());
     }
 
+    /** 一条「合法」的单选：选项 A–D 齐全、答案在选项内。夹具必须是合法数据，
+     *  否则测出来的失败是夹具自己造的，不是被测代码的问题。 */
+    private static final String SINGLE_OPTIONS =
+            "[{\"key\":\"A\",\"text\":\"甲\"},{\"key\":\"B\",\"text\":\"乙\"},"
+            + "{\"key\":\"C\",\"text\":\"丙\"},{\"key\":\"D\",\"text\":\"丁\"}]";
+
     private static Question questionOwnedBy(Long createdBy, long id) {
         Question q = new Question();
         q.setId(id);
         q.setSubject("Java");
         q.setType(QuestionType.SINGLE.code());
         q.setStem("下列哪个是接口？");
+        q.setOptions(SINGLE_OPTIONS);
         q.setAnswer("A");
         q.setScore(10);
         q.setCreatedBy(createdBy);
@@ -206,12 +213,7 @@ class ExamServiceTest {
 
     @Test
     void 没有出题老师的题目拒绝入库() {
-        Question q = new Question();
-        q.setSubject("Java");
-        q.setType(QuestionType.SINGLE.code());
-        q.setStem("下列哪个是接口？");
-        q.setAnswer("A");
-        q.setScore(10);
+        Question q = questionOf("single", 10, 1);
         q.setCreatedBy(null);
 
         BusinessException e = assertThrows(BusinessException.class,
@@ -224,13 +226,7 @@ class ExamServiceTest {
 
     @Test
     void 出题老师的id原样落库() {
-        Question q = new Question();
-        q.setSubject("Java");
-        q.setType(QuestionType.SINGLE.code());
-        q.setStem("下列哪个是接口？");
-        q.setAnswer("A");
-        q.setScore(10);
-        q.setCreatedBy(TEACHER);
+        Question q = questionOf("single", 10, 1);
         when(questionMapper.insert(any(Question.class))).thenAnswer(inv -> {
             inv.getArgument(0, Question.class).setId(7L);
             return 1;
@@ -249,7 +245,9 @@ class ExamServiceTest {
         q.setSubject("Java");
         q.setType(type);
         q.setStem("下列哪个是接口？");
-        q.setAnswer("A");
+        // 判断题在库里 options 必须是 NULL；选择题必须有选项且答案在选项内。
+        q.setOptions("judge".equals(type) ? null : SINGLE_OPTIONS);
+        q.setAnswer("judge".equals(type) ? "T" : "A");
         q.setScore(score);
         q.setDifficulty(difficulty);
         q.setCreatedBy(TEACHER);

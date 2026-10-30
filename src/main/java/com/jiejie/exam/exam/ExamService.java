@@ -112,6 +112,10 @@ public class ExamService {
             if (effective <= 0) {
                 throw new BusinessException("题目 " + questionId + " 的分值不合法: " + effective);
             }
+            // 题库里可能躺着修复之前建出来的脏题（答案不在选项里、判断题答案写成中文）。
+            // 组卷是它进入试卷的最后一道关口，这里再验一次 ——
+            // 否则一条脏题就能让整场考试所有人都拿不到那道题的分。
+            QuestionRule.validate(parseType(q.getType()), q.getOptions(), q.getAnswer());
             questions.add(q);
         }
         int added = 0;
@@ -215,8 +219,9 @@ public class ExamService {
         // GlobalExceptionHandler 的兜底分支会变成 500「服务内部错误」。
         // 可这明明是调用方传错了 type，重试一万次也不会成功 ——
         // 转成业务异常，让 4xx 归 4xx。
+        QuestionType type;
         try {
-            QuestionType.of(question.getType());
+            type = QuestionType.of(question.getType());
         } catch (IllegalArgumentException e) {
             throw new BusinessException("题型只能是 single / multiple / judge: " + question.getType());
         }
@@ -234,8 +239,21 @@ public class ExamService {
         if (question.getCreatedBy() == null) {
             throw new BusinessException("题目必须记录出题老师");
         }
+        // 答案与选项必须自洽。这一步挡的不是"参数格式"，是"这道题根本没法判对"：
+        // 实测过判断题答案写成「正确」、单选题答案是 Z 而选项只有 A–D ——
+        // 两种都能一路入库、发布、让学生作答，然后全班 0 分，且全程不报错。
+        QuestionRule.validate(type, question.getOptions(), question.getAnswer());
         questionMapper.insert(question);
         return question.getId();
+    }
+
+    /** 题库里的题型可能是历史脏数据，解析失败要回 400 而不是让 IllegalArgumentException 变成 500 */
+    private static QuestionType parseType(String code) {
+        try {
+            return QuestionType.of(code);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("题库里的题型不合法: " + code);
+        }
     }
 
     private int currentMaxSeq(Long examId) {
