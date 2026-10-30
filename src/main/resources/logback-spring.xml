@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  日志格式的唯一目的是「能被人用」。
+
+  三个刻意的决定：
+
+  1. 每行都带 traceId（%X{traceId}）。同一个请求的日志行因此可以 grep 到一起，
+     不再靠时间戳猜。没有请求上下文时（比如启动日志、定时任务）这里留空。
+
+  2. 不再输出 ANSI 颜色码。Spring Boot 默认的 %clr() 会在日志里插入 ESC 序列，
+     于是 grep 会把文件当成二进制、报 "Binary file matches" 而不给行号。
+     scripts/e2e.sh 里为此专门加了 grep -a 来绕过 —— 与其在每个消费方绕过，
+     不如在产出端不写。代价是终端里没有颜色，换来的是任何工具都能正常读它。
+
+  3. 单行、定宽前缀。多行日志（异常栈除外）在按行切分时会被切碎，
+     而容器日志、grep、awk 全部是按行工作的。
+-->
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{36} - %msg%n</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>
