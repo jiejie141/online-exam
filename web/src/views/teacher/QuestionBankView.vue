@@ -56,21 +56,46 @@ const answerChoices = computed(() => {
 
 const isMultiple = computed(() => form.type === 'multiple');
 
+// 分页状态。题库比考试列表更容易超过一页 —— 一位老师攒几十道题是常态，
+// 所以这一页的分页条不是「以防万一」，而是日常会用到的控件。
+const page = ref(1);
+const size = ref(20);
+const total = ref(0);
+
 async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    const params = {};
+    const params = { page: page.value, size: size.value };
     if (filter.subject) params.subject = filter.subject;
     if (filter.type) params.type = filter.type;
-    // 分页接口返回 { items, total, page, size }；题库页只展示第一页
-    const page = await listQuestions(params);
-    questions.value = page.items;
+    let p = await listQuestions(params);
+    // 改了筛选条件之后总数会变少，原先停在第 3 页可能已经越界。
+    // 越界时后端返回空数组，而空态写的是「没有符合条件的题目」——
+    // 那句在「其实有，只是这页没有」的时候是错的，所以退回第一页重查。
+    if (!p.items.length && page.value > 1) {
+      page.value = 1;
+      p = await listQuestions({ ...params, page: 1 });
+    }
+    questions.value = p.items;
+    total.value = p.total;
   } catch (e) {
     loadError.value = e.message;
   } finally {
     loading.value = false;
   }
+}
+
+function onPageChange(p) {
+  page.value = p;
+  load();
+}
+
+// 换筛选条件时必须回到第一页：停在第 5 页换一个只有 3 条结果的科目，
+// 用户看到的是空表格，会以为「这个科目没题」。
+function onFilter() {
+  page.value = 1;
+  load();
 }
 
 function openCreate() {
@@ -162,13 +187,13 @@ onMounted(load);
     <p class="page-desc">题目是共享的，同一道题可以出现在多场考试里，分值各自指定。</p>
 
     <div class="toolbar">
-      <el-input v-model="filter.subject" placeholder="按科目筛选" clearable style="width: 160px" @keyup.enter="load" />
+      <el-input v-model="filter.subject" placeholder="按科目筛选" clearable style="width: 160px" @keyup.enter="onFilter" />
       <el-select v-model="filter.type" placeholder="按题型筛选" clearable style="width: 140px">
         <el-option label="单选题" value="single" />
         <el-option label="多选题" value="multiple" />
         <el-option label="判断题" value="judge" />
       </el-select>
-      <el-button @click="load">查询</el-button>
+      <el-button @click="onFilter">查询</el-button>
       <div class="toolbar-spacer" />
       <el-button type="primary" @click="openCreate">新建题目</el-button>
     </div>
@@ -204,6 +229,18 @@ onMounted(load);
           text="没有符合条件的题目。"
           hint="清掉上面的筛选条件再查一次，或者点「新建题目」。"
         />
+
+        <!-- total 是后端 COUNT 出来的总题数；只有超过一页才画分页条 -->
+        <div v-if="total > size" class="pager">
+          <el-pagination
+            layout="total, prev, pager, next"
+            :total="total"
+            :page-size="size"
+            :current-page="page"
+            background
+            @current-change="onPageChange"
+          />
+        </div>
       </div>
     </el-card>
 
@@ -274,5 +311,11 @@ onMounted(load);
   width: 18px;
   font-weight: 600;
   color: #606266;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 </style>

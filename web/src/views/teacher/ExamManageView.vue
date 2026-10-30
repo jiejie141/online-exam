@@ -46,13 +46,26 @@ const statusText = { draft: '草稿', published: '已发布', closed: '已结束
 const typeText = { single: '单选', multiple: '多选', judge: '判断' };
 const statusType = { draft: 'info', published: 'success', closed: 'warning' };
 
+// 分页状态。接口返回 { items, total, page, size }，三个值都要留着：
+// 少了 total 就画不出页码，少了 page 就不知道现在停在第几页。
+const page = ref(1);
+const size = ref(20);
+const total = ref(0);
+
 async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    // 接口是分页的，返回 { items, total, page, size }；这一页只展示第一页
-    const page = await listExams();
-    exams.value = page.items;
+    let p = await listExams({ page: page.value, size: size.value });
+    // 停在越界的页码上会拿到一页空数据，而 EmptyState 写的是「还没有考试」——
+    // 那是假话，考试明明有，只是这页没有。退回第一页重取一次。
+    // 只回退一次、不递归：递归会在内层请求进行时把外层的 loading 关掉，闪一下骨架屏。
+    if (!p.items.length && page.value > 1) {
+      page.value = 1;
+      p = await listExams({ page: 1, size: size.value });
+    }
+    exams.value = p.items;
+    total.value = p.total;
   } catch (e) {
     loadError.value = e.message;
   } finally {
@@ -60,10 +73,22 @@ async function load() {
   }
 }
 
+function onPageChange(p) {
+  page.value = p;
+  load();
+}
+
+// 组卷弹窗要在一屏里把可选题列出来，所以一次要 100 条（后端上限也是 100）。
+// 题库真的超过 100 道时，这里只列得下前 100 道 —— 弹窗里如实写出这个上限，
+// 而不是让人以为「就这么点题」。
+const COMPOSE_PICK_LIMIT = 100;
+const questionTotal = ref(0);
+
 async function loadQuestions() {
   try {
-    const page = await listQuestions();
-    questions.value = page.items;
+    const p = await listQuestions({ page: 1, size: COMPOSE_PICK_LIMIT });
+    questions.value = p.items;
+    questionTotal.value = p.total;
   } catch (e) {
     ElMessage.error(e.message);
   }
@@ -259,6 +284,20 @@ onMounted(load);
         </el-table>
 
         <EmptyState v-else text="还没有考试。" hint="点上面的「新建考试」开始：建考试 → 组卷 → 发布。" />
+
+        <!-- 分页条只在真的不止一页时出现：一页装得下的时候它只是一行噪音。
+             total 是后端 COUNT 出来的总数，不是本页条数 —— 拿本页条数画页码
+             会出现「永远只有 1 页」的假象。 -->
+        <div v-if="total > size" class="pager">
+          <el-pagination
+            layout="total, prev, pager, next"
+            :total="total"
+            :page-size="size"
+            :current-page="page"
+            background
+            @current-change="onPageChange"
+          />
+        </div>
       </div>
     </el-card>
 
@@ -317,6 +356,12 @@ onMounted(load);
         </el-table-column>
         <el-table-column prop="subject" label="科目" width="90" />
       </el-table>
+      <!-- 组卷弹窗一次只列 100 道题（后端单页上限）。题库真的超过 100 道时
+           必须说出来，否则老师会以为「我的题库就这么点题」，然后去重复出题。 -->
+      <p v-if="questionTotal > COMPOSE_PICK_LIMIT" class="dialog-tip">
+        题库共 {{ questionTotal }} 道，这里只列出最近的前 {{ COMPOSE_PICK_LIMIT }} 道。
+        要选更早的题，请先去「题库管理」确认题目还在。
+      </p>
       <div class="compose-sum">
         已选 {{ selectedQuestionIds.length }} 题，合计 {{ composeTotal }} 分
       </div>
@@ -347,5 +392,11 @@ onMounted(load);
   text-align: right;
   color: #606266;
   font-size: 13px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 </style>

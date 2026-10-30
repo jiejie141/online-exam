@@ -62,7 +62,10 @@ async function load() {
       getDistribution(examId),
       getAccuracy(examId),
       getProgress(examId),
-      listExams()
+      // 这里只是拿标题，不需要翻页，但也不能用默认的 20 条 ——
+      // 老师手上超过 20 场考试时，正在看的这场可能不在第一页，
+      // 标题就会退化成「考试 #12」这种没有信息量的东西。100 是后端上限。
+      listExams({ page: 1, size: 100 })
     ]);
     // listExams 是分页接口，返回 { items, ... }；这里只用它找标题
     const examItems = (exams && exams.items) || [];
