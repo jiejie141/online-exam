@@ -2,7 +2,7 @@
 # CI：每次 push / PR 自动验证
 #
 # 分四个 job，故意拆开 —— 失败时能一眼看出是哪一类问题：
-#   unit    : mvn test（178 条单元测试，纯内存，不依赖任何中间件）
+#   unit    : mvn test（180 条单元测试，纯内存，不依赖任何中间件）
 #   frontend: 前端 vitest 单测 + vite 构建（Node，不装 JDK / 不连数据库）
 #   e2e     : 起真 MySQL / Redis / RabbitMQ，跑 scripts/e2e.sh 与 e2e_check.py
 #   docker  : 镜像能不能构建出来
@@ -44,7 +44,7 @@ jobs:
   # ---------------------------------------------------------------------
   # 前端单测 + 构建
   #
-  # 为什么要有这个 job：后端 178 条单测全绿，不代表页面上那个按钮点下去
+  # 为什么要有这个 job：后端 180 条单测全绿，不代表页面上那个按钮点下去
   # 不会炸。倒计时、多选答案的拼接、401 之后往哪跳 —— 这些逻辑都在 JS 里，
   # 之前只靠人点。
   #
@@ -121,7 +121,7 @@ jobs:
         run: mvn -B -q dependency:list -DincludeScope=test -DoutputFile=/tmp/deps.txt && head -40 /tmp/deps.txt || true
 
       - name: mvn test
-        # 这 178 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
+        # 这 180 条都是纯单元测试（Mockito 打桩），**不加载 Spring 上下文**，
         # 因此严格来说不需要密钥。显式给一个是为了：
         #   1. 万一以后有人加了 @SpringBootTest，不会因为「CI 环境没设变量」而红；
         #   2. 让「密钥从哪来」在 workflow 里是可见的，而不是隐含的。

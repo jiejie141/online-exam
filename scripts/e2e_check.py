@@ -179,6 +179,20 @@ def main():
         check("10 道题作答全部保存成功", saved == len(answers),
               f"成功 {saved}/{len(answers)}")
 
+        # 刷新页面 / 换设备重进只走 start 这一条路径，所以 start 必须把
+        # 已经存进 exam_answer 的作答带回来。不带的话，学生看到的是一张全白的卷子
+        # ——答案其实都在库里，只是界面不知道。前端把这件事显示成
+        # 「已答 0/10」和「还有 10 道题没有作答」，全是假的。
+        st, body = api.call("POST", f"/api/exams/{exam_id}/start", token=ss)
+        restored = {a["questionId"]: a["userAnswer"]
+                    for a in (body["data"].get("answers") or [])}
+        check("重新进入考试会带回已保存的作答", len(restored) == len(answers),
+              f"{len(restored)}/{len(answers)}")
+        expected_map = {item["id"]: ans for item, ans in zip(paper, answers)}
+        mismatched = {qid: (expected_map[qid], got) for qid, got in restored.items()
+                      if expected_map.get(qid) != got}
+        check("带回的作答内容与保存的一致", not mismatched, str(mismatched))
+
     print("\n[6] 交卷与判分（异步 MQ）")
     score, latency_ms, err = submit_and_wait(api, ss, record_id)
     check("判分完成", err is None, err or "")

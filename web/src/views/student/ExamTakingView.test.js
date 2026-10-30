@@ -210,6 +210,73 @@ describe('加载失败', () => {
   });
 });
 
+describe('刷新后恢复已存作答', () => {
+  it('startExam 带回的作答会回填到界面，不是一律显示成空白', async () => {
+    // 刷新页面 / 换设备重进只走 start 这一条路径。start 不带回作答时，
+    // 界面会把已经存进 exam_answer 的答案全部显示成没答 ——
+    // 学生看到一张全白的卷子，以为答案丢了（其实库里都在）。
+    const paper = makePaper(3);
+    startExam.mockResolvedValue({
+      recordId: 7,
+      status: 'ongoing',
+      paper,
+      deadlineAt: '2099-01-01T00:00:00',
+      // 第 1 题（单选）存了 A，第 2 题（多选）存了 AB，第 3 题（判断）没答
+      answers: [
+        { questionId: paper[0].id, userAnswer: 'A' },
+        { questionId: paper[1].id, userAnswer: 'AB' }
+      ]
+    });
+    const wrapper = await mountView();
+
+    // 单选：对应的 radio 处于选中态
+    const radios = wrapper.findAll('.q-card')[0].findAll('input[type="radio"]');
+    expect(radios[0].element.checked).toBe(true);
+    expect(radios[1].element.checked).toBe(false);
+
+    // 多选：A、B 两个勾都选中，C 没有
+    const boxes = wrapper.findAll('.q-card')[1].findAll('input[type="checkbox"]');
+    expect(boxes[0].element.checked).toBe(true);
+    expect(boxes[1].element.checked).toBe(true);
+
+    // 顶部进度条不能再说 0/3
+    expect(wrapper.find('.bar-mid strong').text()).toBe('2');
+    // 答题卡也要认这两个格子
+    const cells = wrapper.findAll('.ac-cell');
+    expect(cells[0].classes()).toContain('is-done');
+    expect(cells[1].classes()).toContain('is-done');
+    expect(cells[2].classes()).not.toContain('is-done');
+  });
+
+  it('没有 answers 字段时退回全空白，不报错', async () => {
+    // 兼容性：万一后端还是老版本（不带 answers），页面必须照常能答，
+    // 不能因为 result.answers 是 undefined 就整个崩掉。
+    okStart();
+    const wrapper = await mountView();
+    expect(wrapper.findAll('.ac-cell')).toHaveLength(3);
+    expect(wrapper.find('.bar-mid strong').text()).toBe('0');
+  });
+
+  it('交卷弹窗里的未答题号按恢复后的作答算，不是把答过的也列进去', async () => {
+    const paper = makePaper(3);
+    startExam.mockResolvedValue({
+      recordId: 7,
+      status: 'ongoing',
+      paper,
+      deadlineAt: '2099-01-01T00:00:00',
+      answers: [{ questionId: paper[0].id, userAnswer: 'A' }]
+    });
+    const wrapper = await mountView();
+
+    await wrapper.find('.bar .el-button').trigger('click');
+    await flushPromises();
+
+    const tip = confirmSpy.mock.calls[0][0];
+    expect(tip).toContain('还有 <b>2</b> 道题没有作答');
+    expect(tip).not.toContain('<b class="mb-no">1</b>');
+  });
+});
+
 describe('作答与保存', () => {
   it('多选提交前排序：勾 B 再勾 A，发出去的是 AB 而不是 BA', async () => {
     startExam.mockResolvedValue({

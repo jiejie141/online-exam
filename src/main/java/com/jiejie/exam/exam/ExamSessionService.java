@@ -46,9 +46,16 @@ public class ExamSessionService {
      * submitted/graded。调用方必须按 status 决定是进答题页还是跳成绩页：
      * 只看"拿到卷子了"就渲染答题界面的话，学生会在一个已经交掉的卷子上继续答题，
      * 而每一次保存都会被 saveAnswer 拒掉。卷面照样返回，是因为成绩页也要看原题。
+     *
+     * <p><b>answers 是「已经存进库里的作答」。</b>学生端每答一题就 saveAnswer 一次，
+     * 但刷新页面时只会重新走这个接口 —— 不带回作答的话，前端只能把每道题都当成空白，
+     * 学生看到一张全白的卷子，以为答案丢了，答题卡的「已答 0/10」和交卷弹窗里
+     * 「还有 10 道题没有作答」也全是假的（库里其实都存着）。
+     * 这和 ExamResultView 带 answers 是同一个理由：卷面和作答是两份数据，要一起给。
      */
     public record StartResult(Long recordId, Long examId, String status, LocalDateTime deadlineAt,
-                              LocalDateTime serverTime, List<PaperItem> paper) {
+                              LocalDateTime serverTime, List<PaperItem> paper,
+                              List<ExamAnswer> answers) {
     }
 
     /** score 为 null 表示"已交卷，判分中" */
@@ -122,7 +129,8 @@ public class ExamSessionService {
         ExamRecord existing = recordMapper.findByExamAndUser(examId, userId);
         if (existing != null) {
             return new StartResult(existing.getId(), examId, existing.getStatus(),
-                    existing.getDeadlineAt(), now, loadPaper(examId));
+                    existing.getDeadlineAt(), now, loadPaper(examId),
+                    answerMapper.listByRecord(existing.getId()));
         }
 
         LocalDateTime deadline = computeDeadline(now, exam.getDurationMinutes(), exam.getEndAt());
@@ -142,10 +150,12 @@ public class ExamSessionService {
                 throw e;
             }
             return new StartResult(again.getId(), examId, again.getStatus(),
-                    again.getDeadlineAt(), now, loadPaper(examId));
+                    again.getDeadlineAt(), now, loadPaper(examId),
+                    answerMapper.listByRecord(again.getId()));
         }
+        // 刚插进去的答卷必然没有作答，不必再查一次库
         return new StartResult(record.getId(), examId, RecordStatus.ONGOING.code(),
-                deadline, now, loadPaper(examId));
+                deadline, now, loadPaper(examId), List.of());
     }
 
     /**

@@ -101,7 +101,7 @@ bash scripts/bench.sh        # 取卷吞吐 A/B 压测
 ```bash
 cd web
 npm ci            # 严格按 package-lock.json 装，版本与 CI 一致
-npm test          # Vitest：40 条前端单测
+npm test          # Vitest：43 条前端单测
 npm run build     # 产物写到 ../src/main/resources/static/
 ```
 
@@ -414,14 +414,14 @@ ANSI 颜色码会让 `grep` 把日志文件判成二进制、只回一句 `Binar
 mvn test
 ```
 
-178 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
+180 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
 
 | 测试类 | 条数 | 覆盖 |
 |---|---|---|
 | `GradingRuleTest` | 13 | 单选/多选/判断的满分、漏选半分、错选、顺序无关、空答案、题目没配答案 |
 | `GradingServiceTest` | 6 | 总分累加、重复判分返回原分、未交卷不判、并发下回滚、题目被移出卷子 |
 | `GradingConsumerTest` | 5 | 正常重复静默、真失败计指标、异常不逃回 Broker |
-| `ExamSessionServiceTest` | 24 | 截止时间三种边界、未发布/未开考、重复进入（含已交卷后的状态）、并发进场撞键、超时不能存答案、卷外题不能存、重复交卷、投递失败降级、用时口径、越权访问 |
+| `ExamSessionServiceTest` | 26 | 截止时间三种边界、未发布/未开考、重复进入（含已交卷后的状态）、**重复进入带回已存作答**、首次进场不多查一次库、并发进场撞键、超时不能存答案、卷外题不能存、重复交卷、投递失败降级、用时口径、越权访问 |
 | `PaperCacheTest` | 19 | TTL 抖动边界、空值哨兵、坏数据自删、抢锁、Redis 挂掉时的降级、L1 命中不碰 Redis、空卷面也写 L1、Redis 命中回填 L1、evict 两层都清、多实例下 L1 的最长不一致窗口 |
 | `JwtUtilTest` | 6 | 签发/解析、角色与 userId 往返、过期、篡改、错密钥 |
 | `AuthServiceTest` | 6 | 登录不泄露用户名是否存在、角色白名单、建账号并发撞唯一键 |
@@ -443,13 +443,13 @@ mvn test
 ### 前端单测
 
 ```bash
-cd web && npm test      # vitest run，40 条
+cd web && npm test      # vitest run，43 条
 ```
 
 | 文件 | 条数 | 覆盖 |
 |---|---|---|
 | `src/utils/exam.test.js` | 18 | 倒计时三个坑（字段构造本地时间、毫秒尾巴、负数钳到 00:00）、选项 JSON 坏了返空数组而不是白屏、多选答案 `DAC == ACD`、空串拆出 `[]` 而不是 `['']` |
-| `src/views/student/ExamTakingView.test.js` | 12 | 答题卡三色与点击跳转、标记不影响作答、交卷弹窗列出未答题号、加载失败停在答题页而不把人送回列表、点重试真的重发、多选先排序再提交、每答一题立刻落库 |
+| `src/views/student/ExamTakingView.test.js` | 15 | 答题卡三色与点击跳转、标记不影响作答、交卷弹窗列出未答题号、加载失败停在答题页而不把人送回列表、点重试真的重发、多选先排序再提交、每答一题立刻落库、**刷新后按服务端作答回填（含没有 answers 字段时的兜底）** |
 | `src/api/http.test.js` | 10 | 拆 `ApiResponse` 壳、code 非 0 不混进成功分支、401 先清会话再带 `redirect` 回跳、登录页上不重复 push、超时给中文文案、有 token 才带 `Bearer` |
 
 这几条都是**会让页面出错的逻辑**，不是「渲染出来了就算过」的快照测试。写完做过变异验证：
@@ -506,11 +506,11 @@ cd web && npm test      # vitest run，40 条
    **最后这条不是多余的**：前端产物不进 git，镜像里那份是 Dockerfile 的 node 阶段
    现构建再 COPY 的，这一环断了的话镜像照样构建成功、容器照样起、健康检查照样绿，
    只是打开是 404 —— 没有任何一条断言会碰到它。
-10. **前端只有单测，没有端到端。** Vitest 40 条钉住的是纯逻辑与组件行为：
+10. **前端只有单测，没有端到端。** Vitest 43 条钉住的是纯逻辑与组件行为：
     倒计时用字段构造而不是 `new Date(s)`（差 8 小时那个坑）、多选答案先排序再拼
     （`DAC` 与 `ACD` 必须是同一个答案）、401 之后清 store 并带 `redirect` 回跳、
     答题卡 / 交卷弹窗 / 加载失败三态。**没有 Playwright**，所以「后端改坏了但
-    前端单测仍然绿」这种情况抓不到 —— 接口契约靠后端 178 条单测与 e2e 脚本兜。
+    前端单测仍然绿」这种情况抓不到 —— 接口契约靠后端 180 条单测与 e2e 脚本兜。
 11. **Element Plus 是深路径按需引入，不是官方 resolver。** 一开始按文档配
     `unplugin-vue-components` 的 `ElementPlusResolver`，产物一点没瘦：它在
     element-plus 2.x 上解析到的是 `element-plus/es` 这个 barrel，而 barrel 里的

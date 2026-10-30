@@ -3,6 +3,7 @@ package com.jiejie.exam.exam;
 import com.jiejie.exam.cache.PaperCache;
 import com.jiejie.exam.domain.dto.PaperItem;
 import com.jiejie.exam.domain.entity.Exam;
+import com.jiejie.exam.domain.entity.ExamAnswer;
 import com.jiejie.exam.domain.entity.ExamRecord;
 import com.jiejie.exam.domain.mapper.ExamAnswerMapper;
 import com.jiejie.exam.domain.mapper.ExamMapper;
@@ -28,9 +29,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -134,6 +137,49 @@ class ExamSessionServiceTest {
         // 两个重载，裸写 any() 编译期就无法确定用哪个
         org.mockito.Mockito.verify(recordMapper, org.mockito.Mockito.never())
                 .insert(org.mockito.ArgumentMatchers.any(ExamRecord.class));
+    }
+
+    @Test
+    void 重新进场要把已经存过的作答带回来() {
+        // 刷新页面 / 换设备重进只走 start 这一条路径。
+        // 如果这里不带回作答，前端只能把每道题当成空白：学生看到一张全白的卷子，
+        // 以为答案丢了（其实库里都在），答题卡「已答 0/10」和交卷弹窗里
+        // 「还有 10 道题没有作答」也全是假的。
+        when(examMapper.selectById(1L)).thenReturn(exam(ExamStatus.PUBLISHED.code(),
+                NOW.minusHours(1), NOW.plusHours(2), 60));
+        ExamRecord existing = new ExamRecord();
+        existing.setId(500L);
+        existing.setStatus(RecordStatus.ONGOING.code());
+        existing.setDeadlineAt(LocalDateTime.of(2026, 10, 1, 9, 45));
+        when(recordMapper.findByExamAndUser(1L, 7L)).thenReturn(existing);
+        when(paperCache.get(1L)).thenReturn(List.of());
+
+        ExamAnswer saved = new ExamAnswer();
+        saved.setRecordId(500L);
+        saved.setQuestionId(11L);
+        saved.setUserAnswer("A");
+        when(answerMapper.listByRecord(500L)).thenReturn(List.of(saved));
+
+        ExamSessionService.StartResult result = service.start(1L, 7L);
+
+        assertEquals(1, result.answers().size());
+        assertEquals(11L, result.answers().get(0).getQuestionId());
+        assertEquals("A", result.answers().get(0).getUserAnswer());
+    }
+
+    @Test
+    void 首次进场不去查作答也不必查() {
+        // 刚插进去的答卷不可能有作答，多查一次库纯属浪费。
+        // 这条断言钉住的是「别顺手加一次无谓的查询」。
+        when(examMapper.selectById(1L)).thenReturn(exam(ExamStatus.PUBLISHED.code(),
+                NOW.minusHours(1), NOW.plusHours(2), 60));
+        when(recordMapper.findByExamAndUser(1L, 7L)).thenReturn(null);
+        when(paperCache.get(1L)).thenReturn(List.of());
+
+        ExamSessionService.StartResult result = service.start(1L, 7L);
+
+        assertTrue(result.answers().isEmpty());
+        verify(answerMapper, never()).listByRecord(anyLong());
     }
 
     @Test

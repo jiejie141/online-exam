@@ -122,8 +122,18 @@ async function load() {
     }
     paper.value = result.paper || [];
     deadlineAt.value = result.deadlineAt;
+    // 每道题先按空白初始化，再用服务端带回来的已存作答覆盖。
+    // 这一行不是可有可无的：没有它，刷新页面 / 换设备重进之后，
+    // 界面会把已经存进 exam_answer 的答案全部显示成没答，
+    // 答题卡「已答 0/10」、交卷弹窗「还有 N 道题没有作答」也都是假的。
+    const saved = new Map();
+    for (const a of result.answers || []) {
+      if (a && a.questionId != null && a.userAnswer != null) {
+        saved.set(a.questionId, a.userAnswer);
+      }
+    }
     for (const q of paper.value) {
-      answers.value[q.id] = '';
+      answers.value[q.id] = saved.has(q.id) ? saved.get(q.id) : '';
     }
     tick();
     tickTimer = setInterval(tick, 30000);
