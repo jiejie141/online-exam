@@ -16,12 +16,12 @@ defineEmits(['retry']);
 
 <template>
   <div class="err-state" role="alert">
-    <div class="err-mark">!</div>
+    <div class="err-mark" aria-hidden="true">!</div>
     <div class="err-body">
       <div class="err-title">{{ title }}</div>
       <div v-if="message" class="err-msg">{{ message }}</div>
     </div>
-    <el-button v-if="retryable" size="small" @click="$emit('retry')">重试</el-button>
+    <el-button v-if="retryable" size="small" round @click="$emit('retry')">重试</el-button>
   </div>
 </template>
 
@@ -29,27 +29,27 @@ defineEmits(['retry']);
 .err-state {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 18px;
-  background: #fef0f0;
-  border: 1px solid #fbc4c4;
-  border-radius: 8px;
+  gap: 14px;
+  padding: 18px 20px;
+  background: var(--bad-soft);
+  border: 1px solid #f0c9bd;
+  border-radius: var(--r-md);
 }
 
 .err-mark {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  background: #f56c6c;
+  background: var(--bad);
   color: #fff;
   font-size: 14px;
   font-weight: 700;
   text-align: center;
-  line-height: 22px;
+  line-height: 24px;
 }
 
 .err-body { flex: 1; min-width: 0; }
-.err-title { color: #c45656; font-size: 14px; font-weight: 600; }
-.err-msg { margin-top: 2px; color: #909399; font-size: 13px; word-break: break-word; }
+.err-title { color: var(--bad); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.err-msg { margin-top: 3px; color: var(--ink-3); font-size: 13px; word-break: break-word; }
 </style>

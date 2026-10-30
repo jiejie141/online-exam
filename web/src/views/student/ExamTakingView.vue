@@ -65,6 +65,11 @@ const unansweredNumbers = computed(
   () => paper.value.map((q, i) => (isAnswered(q) ? 0 : i + 1)).filter(Boolean)
 );
 
+// 题号补两位：01 02 … 10。等宽数字配上补零，十道题的题号左边缘才对得齐。
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
 // 本地倒计时只是「显示」：每 30 秒从 deadlineAt 重算一次，而不是简单自减。
 // 简单自减在页面被切到后台时会被浏览器节流，回来就慢了一大截；
 // 用「截止时刻 - 当前时刻」重算，节流再厉害也不会漂。
@@ -85,7 +90,9 @@ function connectWs() {
   if (!auth.token) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   // 浏览器原生 WebSocket 不能带自定义请求头，token 只能走查询参数。
-  const url = `${proto}//${location.host}/ws/countdown?token=${encodeURIComponent(auth.token)}&examId=${examId}`;
+  const url =
+    proto + '//' + location.host + '/ws/countdown?token=' +
+    encodeURIComponent(auth.token) + '&examId=' + examId;
   try {
     ws = new WebSocket(url);
   } catch {
@@ -159,7 +166,7 @@ async function persist(q) {
   try {
     await saveAnswer(recordId.value, q.id, value);
   } catch (e) {
-    ElMessage.error(`第 ${q.seq} 题保存失败：${e.message}`);
+    ElMessage.error('第 ' + q.seq + ' 题保存失败：' + e.message);
   } finally {
     savingIds.value.delete(q.id);
   }
@@ -183,7 +190,7 @@ function toggleMark(q) {
 // 跳到第 idx 题（从 0 开始）。用 scrollIntoView 而不是自己算 offsetTop：
 // 顶部有一个 sticky 的时间条，手算会把题头盖住一部分。
 function jumpTo(idx) {
-  const el = document.getElementById(`q-${idx}`);
+  const el = document.getElementById('q-' + idx);
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   flashId.value = idx;
@@ -198,7 +205,7 @@ async function doSubmit(auto) {
     const result = await submitExam(recordId.value);
     submitted.value = true;
     if (result.score !== null && result.score !== undefined) {
-      ElMessage.success(`交卷成功，得分 ${result.score}`);
+      ElMessage.success('交卷成功，得分 ' + result.score);
     } else {
       // score 为 null 是「已交卷，判分中」，不是失败
       ElMessage.success('交卷成功，正在判分');
@@ -222,9 +229,9 @@ async function doSubmit(auto) {
 // 现在把未答题号直接列出来，并且在弹窗里点得动（点了就跳过去）。
 async function onSubmitClick() {
   const missing = unansweredNumbers.value;
-  const boxes = missing.map((n) => `<b class="mb-no">${n}</b>`).join('');
+  const boxes = missing.map((n) => '<b class="mb-no">' + n + '</b>').join('');
   const tip = missing.length
-    ? `<p>还有 <b>${missing.length}</b> 道题没有作答：</p><p class="mb-list">${boxes}</p><p>交卷后不能修改。确定交卷吗？</p>`
+    ? '<p>还有 <b>' + missing.length + '</b> 道题没有作答：</p><p class="mb-list">' + boxes + '</p><p>交卷后不能修改。确定交卷吗？</p>'
     : '<p>全部题目都已作答。</p><p>交卷后不能修改，确定交卷吗？</p>';
   try {
     await ElMessageBox.confirm(tip, '确认交卷', {
@@ -255,18 +262,19 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-loading="loading" class="taking">
-    <!-- 顶部固定条：剩余时间 + 进度 + 交卷。考试页最需要随时可见的就是这三样 -->
+    <!-- 顶部固定条：剩余时间 + 进度 + 交卷。考试页最需要随时可见的就是这三样。
+         时间用超大字号，是这一屏里唯一会变的东西 —— 它值得占掉最显眼的位置。 -->
     <div v-if="!loadError" class="bar">
       <div class="bar-left">
-        <span class="bar-label">剩余时间</span>
-        <span class="clock" :class="{ urgent }">{{ remainText }}</span>
+        <p class="eyebrow">Time Remaining</p>
+        <span class="clock display-num" :class="{ urgent }">{{ remainText }}</span>
       </div>
       <div class="bar-mid">
         <span class="bar-label">已答</span>
         <strong>{{ answeredCount }}</strong>
         <span class="muted">/ {{ paper.length }}</span>
       </div>
-      <el-button type="primary" :loading="submitting" @click="onSubmitClick">交卷</el-button>
+      <el-button type="primary" round :loading="submitting" @click="onSubmitClick">交卷</el-button>
     </div>
 
     <SkeletonBlock v-if="loading" :rows="8" />
@@ -281,58 +289,77 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="taking-body">
         <div class="paper">
-          <div
+          <section
             v-for="(q, idx) in paper"
-            :id="`q-${idx}`"
+            :id="'q-' + idx"
             :key="q.id"
             class="q-card"
             :class="{ 'q-card-flash': flashId === idx, 'q-card-marked': marked.has(q.id) }"
           >
-            <div class="q-head">
-              <span class="q-no">{{ idx + 1 }}</span>
-              <span class="q-type">{{ typeLabel(q.type) }}</span>
-              <span class="q-score">{{ q.score }} 分</span>
-              <span v-if="savingIds.has(q.id)" class="q-saving">保存中…</span>
-              <button
-                type="button"
-                class="q-mark"
-                :class="{ on: marked.has(q.id) }"
-                :aria-pressed="marked.has(q.id)"
-                @click="toggleMark(q)"
-              >
-                {{ marked.has(q.id) ? '已标记' : '标记' }}
-              </button>
+            <div class="q-grid">
+              <!-- 左侧：超大题号 + 分值。参考图里题号是整屏最重的元素，
+                   它承担「我现在在第几题」这个信息，比一个圆点小徽标有效得多。 -->
+              <div class="q-index">
+                <span class="q-no display-num">{{ pad2(idx + 1) }}</span>
+                <span class="q-score">{{ q.score }} 分</span>
+              </div>
+
+              <div class="q-main">
+                <div class="q-meta">
+                  <span class="q-type">{{ typeLabel(q.type) }}</span>
+                  <span v-if="savingIds.has(q.id)" class="q-saving">保存中…</span>
+                  <button
+                    type="button"
+                    class="q-mark"
+                    :class="{ on: marked.has(q.id) }"
+                    :aria-pressed="marked.has(q.id)"
+                    @click="toggleMark(q)"
+                  >
+                    {{ marked.has(q.id) ? '已标记' : '标记' }}
+                  </button>
+                </div>
+
+                <p class="q-stem">{{ q.stem }}</p>
+
+                <!-- 单选 / 判断：一个选项即提交 -->
+                <el-radio-group
+                  v-if="q.type === 'single' || q.type === 'judge'"
+                  v-model="answers[q.id]"
+                  class="q-options"
+                  @change="persist(q)"
+                >
+                  <el-radio
+                    v-for="(opt, i) in choicesOf(q)"
+                    :key="opt.key"
+                    :value="opt.key"
+                    class="q-option"
+                  >
+                    <span class="opt-idx">{{ pad2(i + 1) }}</span>
+                    <span class="opt-text">{{ opt.text }}</span>
+                  </el-radio>
+                </el-radio-group>
+
+                <!-- 多选：勾完一次提交。el-checkbox-group 的 v-model 是数组，
+                     提交前要转成 'ABC' 这种字符串，后端 GradingRule 按字符集合比较 -->
+                <el-checkbox-group
+                  v-else-if="q.type === 'multiple'"
+                  :model-value="splitMultiAnswer(answers[q.id])"
+                  class="q-options"
+                  @change="(vals) => onMultiChange(q, vals)"
+                >
+                  <el-checkbox
+                    v-for="(opt, i) in choicesOf(q)"
+                    :key="opt.key"
+                    :value="opt.key"
+                    class="q-option"
+                  >
+                    <span class="opt-idx">{{ pad2(i + 1) }}</span>
+                    <span class="opt-text">{{ opt.text }}</span>
+                  </el-checkbox>
+                </el-checkbox-group>
+              </div>
             </div>
-
-            <div class="q-stem">{{ q.stem }}</div>
-
-            <!-- 单选 / 判断：一个选项即提交 -->
-            <el-radio-group
-              v-if="q.type === 'single' || q.type === 'judge'"
-              v-model="answers[q.id]"
-              class="q-options"
-              @change="persist(q)"
-            >
-              <el-radio v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
-                <span class="opt-key">{{ opt.key }}</span>
-                <span>{{ opt.text }}</span>
-              </el-radio>
-            </el-radio-group>
-
-            <!-- 多选：勾完一次提交。el-checkbox-group 的 v-model 是数组，
-                 提交前要转成 'ABC' 这种字符串，后端 GradingRule 按字符集合比较 -->
-            <el-checkbox-group
-              v-else-if="q.type === 'multiple'"
-              :model-value="splitMultiAnswer(answers[q.id])"
-              class="q-options"
-              @change="(vals) => onMultiChange(q, vals)"
-            >
-              <el-checkbox v-for="opt in choicesOf(q)" :key="opt.key" :value="opt.key" class="q-option">
-                <span class="opt-key">{{ opt.key }}</span>
-                <span>{{ opt.text }}</span>
-              </el-checkbox>
-            </el-checkbox-group>
-          </div>
+          </section>
 
           <EmptyState
             v-if="!paper.length"
@@ -341,7 +368,7 @@ onBeforeUnmount(() => {
 
           <div v-if="paper.length" class="submit-row">
             <span class="muted">本卷共 {{ paper.length }} 题，总分 {{ totalScore }} 分</span>
-            <el-button type="primary" size="large" :loading="submitting" @click="onSubmitClick">
+            <el-button type="primary" round size="large" :loading="submitting" @click="onSubmitClick">
               交卷
             </el-button>
           </div>
@@ -351,9 +378,9 @@ onBeforeUnmount(() => {
              旧版一张卷子要滚近 3000 像素，顶部只有一个「已答 3/10」，
              想回第 2 题改一个答案只能靠手滚。 -->
         <aside v-if="paper.length" class="answer-card" aria-label="答题卡">
-          <div class="ac-title">答题卡</div>
+          <p class="eyebrow">Answer Sheet</p>
           <div class="ac-progress">
-            <span class="ac-done">{{ answeredCount }}</span>
+            <span class="ac-done display-num">{{ answeredCount }}</span>
             <span class="ac-total">/ {{ paper.length }}</span>
           </div>
           <div class="ac-grid">
@@ -366,7 +393,7 @@ onBeforeUnmount(() => {
                 'is-done': isAnswered(q),
                 'is-marked': marked.has(q.id)
               }"
-              :title="`第 ${idx + 1} 题${isAnswered(q) ? '（已答）' : '（未答）'}${marked.has(q.id) ? ' · 已标记' : ''}`"
+              :title="'第 ' + (idx + 1) + ' 题' + (isAnswered(q) ? '（已答）' : '（未答）') + (marked.has(q.id) ? ' · 已标记' : '')"
               @click="jumpTo(idx)"
             >
               {{ idx + 1 }}
@@ -388,24 +415,36 @@ onBeforeUnmount(() => {
   padding-bottom: 40px;
 }
 
+/* ---------------- 顶部时间条 ---------------- */
 .bar {
   position: sticky;
-  top: 60px;
+  top: calc(var(--header-h) + 12px);
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 12px 20px;
-  margin-bottom: 16px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
+  gap: 32px;
+  padding: 16px 26px;
+  margin-bottom: 8px;
+  background: rgba(255, 253, 251, 0.92);
+  backdrop-filter: saturate(160%) blur(10px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
 .bar-left {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clock {
+  font-size: 38px;
+  color: var(--ink);
+}
+
+/* 最后 5 分钟变珊瑚色，是唯一一个「不说也想让人看到」的状态 */
+.clock.urgent {
+  color: var(--accent-strong);
 }
 
 .bar-mid {
@@ -416,190 +455,251 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
-.bar-label {
-  color: #909399;
-  font-size: 13px;
-}
-
-.clock {
+.bar-mid strong {
   font-size: 22px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: #303133;
 }
 
-/* 最后 5 分钟变红，是唯一一个「不说也想让人看到」的状态 */
-.clock.urgent {
-  color: #f56c6c;
+.bar-label {
+  color: var(--ink-4);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .muted {
-  color: #909399;
+  color: var(--ink-4);
   font-size: 13px;
 }
 
 /* 左边卷子、右边答题卡。答题卡是 sticky 的：滚到第 8 题时它还在视野里 */
 .taking-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 210px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: 32px;
   align-items: start;
 }
 
 .paper {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
   min-width: 0;
 }
 
+/* ---------------- 单题 ----------------
+   不用一张张卡片堆叠：参考图里题与题之间只有一条细线。
+   去掉卡片的边框和圆角，版面立刻安静下来，题号才有分量。 */
 .q-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 20px 24px;
-  /* 跳转高亮用 outline 而不是 border：border 会改变盒子尺寸，让页面抖一下 */
-  scroll-margin-top: 80px;
-  transition: outline-color 0.2s;
-  outline: 2px solid transparent;
+  padding: 40px 4px 44px;
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: 140px;
+  transition: background 0.25s;
+  background: transparent;
 }
 
+/* 跳转高亮用底色而不是 outline：outline 会贴着内容边缘画，
+   在去掉卡片边框之后会显得像选中框，底色更像「翻到这一页」。 */
 .q-card-flash {
-  outline-color: #409eff;
+  background: var(--accent-soft);
 }
 
-.q-card-marked {
-  border-color: #e6a23c;
+.q-card-marked .q-no {
+  color: var(--accent-ink);
 }
 
-.q-head {
+.q-grid {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.q-index {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
 }
 
 .q-no {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: #ecf5ff;
-  color: #409eff;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.q-type {
-  font-size: 13px;
-  color: #606266;
+  font-size: 46px;
+  color: var(--ink-4);
 }
 
 .q-score {
-  font-size: 13px;
-  color: #909399;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
+}
+
+.q-main {
+  min-width: 0;
+}
+
+.q-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.q-type {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-4);
 }
 
 .q-saving {
-  margin-left: auto;
-  font-size: 12px;
-  color: #e6a23c;
+  font-size: 11px;
+  color: var(--accent-ink);
 }
 
 .q-mark {
   margin-left: auto;
-  padding: 2px 8px;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  background: #fff;
-  color: #909399;
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--ink-4);
+  font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 
 .q-mark:hover {
-  color: #e6a23c;
-  border-color: #f3d19e;
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
 }
 
 .q-mark.on {
-  color: #b88230;
-  border-color: #e6a23c;
-  background: #fdf6ec;
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
 }
 
 .q-stem {
-  margin-bottom: 16px;
-  font-size: 15px;
-  line-height: 1.7;
+  margin: 0 0 22px;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.55;
+  /* 题干最长一行别超过 60 字，再宽眼睛要来回扫 */
+  max-width: 60ch;
 }
 
+/* ---------------- 选项 ----------------
+   参考图里每个选项是「两位序号 + 内容」的一整行，选中时整行填色。
+   这里把 Element Plus 的圆点藏掉（用视觉隐藏而不是 display:none，
+   否则键盘就没法聚焦了），让整行自己承担选中态。 */
 .q-options {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
+  gap: 8px;
+  width: 100%;
 }
 
-/* 让整行可点，而不是只有左边的小圆点 —— 点一行比点一个 14px 的圆容易得多 */
-.q-option {
+:deep(.el-radio),
+:deep(.el-checkbox) {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  width: 100%;
   height: auto;
-  padding: 8px 10px;
   margin: 0;
-  border-radius: 6px;
+  padding: 13px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 
-.q-option:hover {
-  background: #f5f7fa;
+:deep(.el-radio:hover),
+:deep(.el-checkbox:hover) {
+  border-color: var(--ink-4);
 }
 
-.opt-key {
-  display: inline-block;
-  min-width: 18px;
-  font-weight: 600;
-  color: #606266;
+/* 视觉隐藏原始 input，保留键盘可达与读屏可读 */
+:deep(.el-radio__input),
+:deep(.el-checkbox__input) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* 焦点环要自己画：原始 input 被隐藏后，浏览器默认的 focus 描边也看不见了 */
+:deep(.el-radio:focus-within),
+:deep(.el-checkbox:focus-within) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:deep(.el-radio__label),
+:deep(.el-checkbox__label) {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  white-space: normal;
+}
+
+.opt-idx {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-4);
+}
+
+/* 选中：整行珊瑚色实心 + 白字。这是参考图里最醒目的一处，
+   也是唯一用强调色的地方 —— 颜色越少，「选中的是它」越明确。 */
+:deep(.el-radio.is-checked),
+:deep(.el-checkbox.is-checked) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+:deep(.el-radio.is-checked .el-radio__label),
+:deep(.el-checkbox.is-checked .el-checkbox__label),
+:deep(.el-radio.is-checked .opt-idx),
+:deep(.el-checkbox.is-checked .opt-idx) {
+  color: #fff;
 }
 
 .submit-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
+  padding: 28px 4px 0;
 }
 
 /* ---------------- 答题卡 ---------------- */
 .answer-card {
   position: sticky;
-  top: 140px;
-  padding: 16px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-}
-
-.ac-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
+  top: 160px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
 .ac-progress {
-  margin: 6px 0 12px;
-  font-size: 13px;
-  color: #909399;
+  margin: 8px 0 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
 }
 
 .ac-done {
-  color: #409eff;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 30px;
+  color: var(--ink);
+}
+
+.ac-total {
+  font-size: 13px;
+  color: var(--ink-4);
 }
 
 .ac-grid {
@@ -610,40 +710,43 @@ onBeforeUnmount(() => {
 
 .ac-cell {
   aspect-ratio: 1;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  background: #fff;
-  color: #606266;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
   padding: 0;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 
 .ac-cell:hover {
-  border-color: #409eff;
-  color: #409eff;
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 /* 已答：填充；未答：空白轮廓。两者靠「有没有底」区分，
    不靠颜色深浅 —— 色弱的人也能分出来。 */
 .ac-cell.is-done {
-  background: #409eff;
-  border-color: #409eff;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 
-/* 标记：底下加一条橙色横线，和已答的填充不冲突（已答+标记能同时成立） */
+/* 标记：底下加一条横线，和已答的填充不冲突（已答+标记能同时成立） */
 .ac-cell.is-marked {
-  box-shadow: inset 0 -3px 0 #e6a23c;
+  box-shadow: inset 0 -3px 0 var(--ink);
 }
 
 .ac-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 12px;
-  font-size: 12px;
-  color: #909399;
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--ink-4);
 }
 
 .ac-legend span {
@@ -654,21 +757,22 @@ onBeforeUnmount(() => {
 
 .dot {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 2px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--line);
 }
 
-.dot-done { background: #409eff; border-color: #409eff; }
-.dot-todo { background: #fff; }
-.dot-mark { background: #fff; border-color: #e6a23c; box-shadow: inset 0 -3px 0 #e6a23c; }
+.dot-done { background: var(--accent); border-color: var(--accent); }
+.dot-todo { background: transparent; }
+.dot-mark { background: transparent; box-shadow: inset 0 -3px 0 var(--ink); }
 
 /* 窄屏：答题卡从右栏变成卷子上方的一条，宫格自动铺满整行。
    不隐藏它 —— 手机用户比桌面用户更需要「跳到第几题」。 */
 @media (max-width: 900px) {
   .taking-body {
     grid-template-columns: 1fr;
+    gap: 20px;
   }
 
   .answer-card {
@@ -681,8 +785,32 @@ onBeforeUnmount(() => {
   }
 
   .bar {
-    gap: 12px;
+    gap: 16px;
+    padding: 12px 16px;
     flex-wrap: wrap;
+  }
+
+  .clock {
+    font-size: 30px;
+  }
+
+  .q-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .q-no {
+    font-size: 34px;
+  }
+
+  .q-index {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .q-stem {
+    font-size: 17px;
   }
 }
 </style>

@@ -20,7 +20,7 @@ defineProps({
       :key="i"
       class="skeleton-row"
       :class="{ 'skeleton-row-dense': dense }"
-      :style="{ width: i === rows ? '45%' : i === 1 ? '70%' : '100%' }"
+      :style="{ width: i === rows ? '42%' : i === 1 ? '68%' : '100%' }"
     />
   </div>
 </template>
@@ -29,21 +29,22 @@ defineProps({
 .skeleton {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 8px 0;
+  gap: 14px;
+  padding: 10px 0;
 }
 
 .skeleton-row {
-  height: 16px;
-  border-radius: 4px;
-  /* 用背景位移做扫光，比 opacity 闪烁不刺眼；动画停掉也仍然是一条灰条 */
-  background: linear-gradient(90deg, #f0f2f5 25%, #e6e9ee 37%, #f0f2f5 63%);
+  height: 15px;
+  border-radius: var(--r-xs);
+  /* 用背景位移做扫光，比 opacity 闪烁不刺眼；动画停掉也仍然是一条灰条。
+     底色取自纸色系而不是冷灰，否则它会像一块贴错地方的 UI。 */
+  background: linear-gradient(90deg, #efeae5 25%, #e4ddd6 37%, #efeae5 63%);
   background-size: 400% 100%;
-  animation: skeleton-sweep 1.4s ease infinite;
+  animation: skeleton-sweep 1.5s ease infinite;
 }
 
 .skeleton-row-dense {
-  height: 12px;
+  height: 11px;
 }
 
 @keyframes skeleton-sweep {

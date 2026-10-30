@@ -46,6 +46,15 @@ const rows = computed(() => {
 
 const correctCount = computed(() => rows.value.filter((r) => r.correct === true).length);
 
+// 满分是多少：从卷面各题分值累加，而不是写死 100。
+// 不同考试的卷面总分可以不同（组卷时每题分值是可配的）。
+const fullScore = computed(() =>
+  rows.value.reduce((s, r) => s + (r.q.score || 0), 0)
+);
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
 
 function answerText(q, raw) {
   if (raw === null || raw === undefined || raw === '') return '（未作答）';
@@ -61,6 +70,9 @@ function answerText(q, raw) {
   return map.get(s) || s;
 }
 
+// 正确答案的文本。后端不会把答案随卷面发给学生，所以这里没有它 ——
+// 只显示「你答了什么」和「对不对」，不显示「正确答案是什么」。
+// 这是有意的：成绩单能看错在哪，但不能变成一份标准答案。
 function load() {
   loadError.value = '';
   return getResult(recordId)
@@ -111,9 +123,6 @@ async function refresh() {
   loading.value = false;
 }
 
-// 「判分中」这个状态是后端判完之前唯一能给的答案，所以要让它自己继续问；
-// 但错误态不轮询 —— 网络断了每秒重试一次只会刷出一串红字。
-
 onMounted(async () => {
   await load();
   loading.value = false;
@@ -126,10 +135,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <div class="toolbar">
-      <h2 class="page-title" style="margin: 0">成绩单</h2>
-      <div class="toolbar-spacer" />
-      <el-button @click="router.replace({ name: 'student-exams' })">返回考试列表</el-button>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Result</p>
+        <h1 class="page-title">成绩单</h1>
+      </div>
+      <el-button round @click="router.replace({ name: 'student-exams' })">返回考试列表</el-button>
     </div>
 
     <!-- 四种界面各走各的：加载中 / 加载失败 / 判分中 / 有结果。
@@ -145,14 +156,14 @@ onBeforeUnmount(() => {
     />
 
     <!-- 判分中：明确告诉学生「已收到，正在算」，而不是显示一个 0 分 -->
-    <el-card v-else-if="pending" shadow="never" class="pending-card">
-      <!-- 用纯 CSS 转圈而不是 @element-plus/icons-vue 的图标组件： -->
-      <!-- 那是一个额外的依赖，只为转一个圈不值得装 -->
+    <div v-else-if="pending" class="pending-card">
+      <!-- 用纯 CSS 转圈而不是 @element-plus/icons-vue 的图标组件：
+           那是一个额外的依赖，只为转一个圈不值得装 -->
       <span class="pending-spinner" aria-hidden="true"></span>
       <p class="pending-title">答卷已提交，正在判分</p>
       <p class="pending-desc">判分是异步完成的，通常几秒内出结果，这个页面会自动刷新。</p>
-      <el-button type="primary" plain @click="refresh">手动刷新</el-button>
-    </el-card>
+      <el-button type="primary" round @click="refresh">手动刷新</el-button>
+    </div>
 
     <EmptyState
       v-else-if="!data"
@@ -161,34 +172,66 @@ onBeforeUnmount(() => {
     />
 
     <template v-else>
-      <el-card shadow="never" class="score-card">
-        <div class="score-main">
-          <div class="score-num">{{ score }}</div>
-          <div class="score-meta">
-            <div class="score-label">总分</div>
-            <div class="score-sub">
-              答对 {{ correctCount }} / {{ rows.length }} 题
-            </div>
-          </div>
+      <!-- 大分数是这一页的主角。旁边配三个数字：答对题数、卷面总分、答对率，
+           让「87 分」这个数有参照，而不是孤零零一个数字。 -->
+      <section class="score-hero">
+        <div class="sh-score">
+          <p class="eyebrow">Final Score</p>
+          <div class="sh-num display-num">{{ score }}</div>
+          <div class="sh-of">满分 {{ fullScore }}</div>
         </div>
-      </el-card>
 
-      <div class="detail-title">答题详情</div>
-      <div class="detail">
-        <div v-for="r in rows" :key="r.q.id" class="d-row" :class="{ 'd-ok': r.correct, 'd-bad': !r.correct }">
-          <div class="d-head">
-            <span class="d-no">{{ r.no }}</span>
-            <span class="d-type">{{ typeLabel(r.q.type) }}</span>
-            <span class="d-got">{{ r.scoreGot == null ? 0 : r.scoreGot }} / {{ r.q.score }} 分</span>
-            <span class="d-flag">{{ r.correct ? '正确' : '错误' }}</span>
+        <dl class="sh-stats">
+          <div>
+            <dt>答对</dt>
+            <dd><strong>{{ correctCount }}</strong> / {{ rows.length }} 题</dd>
           </div>
-          <div class="d-stem">{{ r.q.stem }}</div>
-          <div class="d-answers">
+          <div>
+            <dt>得分率</dt>
+            <dd>
+              <strong>{{ fullScore ? Math.round((score / fullScore) * 100) : 0 }}</strong> %
+            </dd>
+          </div>
+          <div>
+            <dt>状态</dt>
+            <dd class="sh-pass" :class="score >= 60 ? 'is-pass' : 'is-fail'">
+              {{ score >= 60 ? '已通过' : '未通过' }}
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <div class="panel">
+        <p class="eyebrow">Breakdown</p>
+        <h2 class="panel-title">答题详情</h2>
+        <p class="panel-desc">
+          按卷面顺序列出每一题的作答与得分。这里只显示你答了什么、对不对，
+          不显示标准答案 —— 成绩单不是答案册。
+        </p>
+
+        <div class="detail">
+          <article
+            v-for="r in rows"
+            :key="r.q.id"
+            class="d-row"
+            :class="r.correct ? 'd-ok' : 'd-bad'"
+          >
+            <div class="d-head">
+              <span class="d-no display-num">{{ pad2(r.no) }}</span>
+              <span class="d-type">{{ typeLabel(r.q.type) }}</span>
+              <span class="d-flag">{{ r.correct ? '正确' : '错误' }}</span>
+              <span class="d-got">
+                {{ r.scoreGot == null ? 0 : r.scoreGot }} / {{ r.q.score }} 分
+              </span>
+            </div>
+            <p class="d-stem">{{ r.q.stem }}</p>
             <div class="d-line">
               <span class="d-k">你的答案</span>
-              <span class="d-v" :class="{ 'v-bad': !r.correct }">{{ answerText(r.q, r.userAnswer) }}</span>
+              <span class="d-v" :class="{ 'v-bad': !r.correct }">
+                {{ answerText(r.q, r.userAnswer) }}
+              </span>
             </div>
-          </div>
+          </article>
         </div>
       </div>
     </template>
@@ -196,17 +239,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* ---------------- 判分中 ---------------- */
 .pending-card {
   text-align: center;
-  padding: 24px 0;
+  padding: 64px 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
 .pending-spinner {
   display: inline-block;
-  width: 28px;
-  height: 28px;
-  border: 3px solid #d9ecff;
-  border-top-color: #409eff;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: pending-spin 0.8s linear infinite;
 }
@@ -218,131 +265,192 @@ onBeforeUnmount(() => {
 }
 
 .pending-title {
-  margin: 12px 0 4px;
-  font-size: 16px;
+  margin: 16px 0 6px;
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .pending-desc {
-  margin: 0 0 16px;
-  color: #909399;
+  margin: 0 0 20px;
+  color: var(--ink-3);
   font-size: 13px;
 }
 
-.score-card {
-  margin-bottom: 20px;
-}
-
-.score-main {
-  display: flex;
+/* ---------------- 分数区 ---------------- */
+.score-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 48px;
   align-items: center;
-  gap: 20px;
+  padding: 36px 40px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
-.score-num {
-  font-size: 56px;
-  font-weight: 700;
-  line-height: 1;
-  color: #409eff;
-  font-variant-numeric: tabular-nums;
+.sh-num {
+  margin-top: 6px;
+  font-size: clamp(64px, 9vw, 104px);
+  color: var(--ink);
 }
 
-.score-label {
-  font-size: 13px;
-  color: #909399;
-}
-
-.score-sub {
+.sh-of {
   margin-top: 4px;
-  font-size: 14px;
-  color: #606266;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--ink-4);
 }
 
-.detail-title {
-  margin: 0 0 12px;
-  font-size: 15px;
+.sh-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.sh-stats dt {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 6px;
+}
+
+.sh-stats dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.sh-stats strong {
+  font-size: 26px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  letter-spacing: -0.03em;
+}
+
+.sh-pass.is-pass {
+  color: var(--ok);
   font-weight: 600;
 }
 
+.sh-pass.is-fail {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+/* ---------------- 明细 ---------------- */
 .detail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
+/* 每道题一条细线分隔，不用一张张卡片 —— 卡片一多版面就碎 */
 .d-row {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-left: 3px solid #c0c4cc;
-  border-radius: 6px;
-  padding: 14px 18px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line-soft);
 }
 
-.d-row.d-ok {
-  border-left-color: #67c23a;
-}
-
-.d-row.d-bad {
-  border-left-color: #f56c6c;
+.d-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .d-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  font-size: 13px;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .d-no {
-  font-weight: 600;
-  color: #606266;
+  font-size: 22px;
+  color: var(--ink-4);
+}
+
+.d-ok .d-no {
+  color: var(--ok);
+}
+
+.d-bad .d-no {
+  color: var(--bad);
 }
 
 .d-type {
-  color: #909399;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.d-flag {
+  padding: 1px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.d-bad .d-flag {
+  background: var(--bad-soft);
+  color: var(--bad);
 }
 
 .d-got {
   margin-left: auto;
-  color: #606266;
-}
-
-.d-flag {
-  padding: 1px 8px;
-  border-radius: 3px;
-  font-size: 12px;
-  background: #f0f9eb;
-  color: #67c23a;
-}
-
-.d-bad .d-flag {
-  background: #fef0f0;
-  color: #f56c6c;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
 }
 
 .d-stem {
-  margin-bottom: 10px;
-  font-size: 14px;
-  line-height: 1.6;
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.65;
+  max-width: 62ch;
 }
 
 .d-line {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   font-size: 13px;
 }
 
 .d-k {
-  min-width: 64px;
-  color: #909399;
+  flex: none;
+  min-width: 60px;
+  color: var(--ink-4);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding-top: 2px;
 }
 
 .d-v {
-  color: #303133;
+  color: var(--ink-2);
 }
 
 .d-v.v-bad {
-  color: #f56c6c;
+  color: var(--bad);
+}
+
+@media (max-width: 900px) {
+  .score-hero {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 26px 22px;
+  }
+
+  .sh-stats {
+    gap: 16px;
+  }
+
+  .sh-stats strong {
+    font-size: 20px;
+  }
 }
 </style>

@@ -23,7 +23,10 @@ function logout() {
     <header v-if="showShell" class="app-header">
       <div class="header-inner">
         <RouterLink :to="{ name: homeName }" class="brand">
-          在线考试系统
+          <!-- 品牌标记是一个旋转 45 度的方块，不用图标库：
+               为一个菱形装一个 300KB 的图标包不值得。 -->
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-word">在线考试</span>
         </RouterLink>
 
         <nav class="nav">
@@ -41,7 +44,7 @@ function logout() {
             {{ auth.realName }}
             <span class="role-tag">{{ auth.role === 'teacher' ? '老师' : '学生' }}</span>
           </span>
-          <el-button link type="primary" @click="logout">退出登录</el-button>
+          <button type="button" class="link-btn" @click="logout">退出</button>
         </div>
       </div>
     </header>

@@ -1,0 +1,100 @@
+/* 设计变量。整个前端的颜色、字号、圆角、间距都从这里取，
+   组件里不再出现裸色值 —— 想换配色只改这一个文件。 */
+
+@font-face {
+  font-family: 'Geist';
+  /* 可变字重：一个文件覆盖 100–900，省掉为每个字重各放一份的请求数。
+     woff2 是唯一目标格式（IE 之外的浏览器都支持），不再配 woff/ttf 兜底。 */
+  src: url('../assets/fonts/geist-var.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* ---- 墨色与纸色 ----
+     刻意不用纯黑纯白：纯黑在浅底上对比过硬，看久了刺眼；
+     纸色带一点暖调，配珊瑚色才不显得脏。 */
+  --ink: #14110f;
+  --ink-2: #3d3733;
+  --ink-3: #6b625b;
+  --ink-4: #a79d95;
+  --paper: #f6f3f0;
+  --surface: #fffdfb;
+  --surface-2: #fbf8f5;
+  --line: #e2dbd4;
+  --line-soft: #ece6e0;
+
+  /* ---- 强调色 ----
+     只有一个强调色。多一个颜色就多一条「这个颜色代表什么」的规则，
+     而这条规则没人会记住。 */
+  --accent: #ff785a;
+  --accent-strong: #e85f3f;
+  --accent-ink: #a93a20;
+  --accent-soft: #ffece6;
+
+  /* ---- 语义色（只用于对错，不参与装饰） ---- */
+  --ok: #2f7a52;
+  --ok-soft: #e7f3ec;
+  --bad: #b23c22;
+  --bad-soft: #fdeae4;
+  --warn: #a06a12;
+  --warn-soft: #fbf1dd;
+
+  /* ---- 字体 ---- */
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas,
+    'Liberation Mono', monospace;
+
+  /* ---- 圆角：越小的元素圆角越小，全都 8px 会显得像模板 ---- */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 22px;
+  --r-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(20, 17, 15, 0.04);
+  --shadow-md: 0 10px 30px -12px rgba(20, 17, 15, 0.18);
+  --shadow-lg: 0 24px 60px -24px rgba(20, 17, 15, 0.28);
+
+  --shell: 1200px;
+  --header-h: 64px;
+
+  /* ---- Element Plus 主题映射 ----
+     EP 的组件全部读 CSS 变量，所以改主题不需要覆盖它的选择器，
+     只要把同名变量指到我们的色板。light-3/5/7/8/9 是它算好的
+     深浅梯度（hover / disabled / 背景），必须一起给，
+     只改 primary 会得到「按钮是珊瑚色、hover 变回蓝色」的怪结果。 */
+  --el-font-family: var(--font-sans);
+  --el-color-primary: #ff785a;
+  --el-color-primary-light-3: #ff9678;
+  --el-color-primary-light-5: #ffb3a0;
+  --el-color-primary-light-7: #ffd0c4;
+  --el-color-primary-light-8: #ffe0d8;
+  --el-color-primary-light-9: #ffefeb;
+  --el-color-primary-dark-2: #e05f42;
+  --el-color-success: #2f7a52;
+  --el-color-warning: #a06a12;
+  --el-color-danger: #b23c22;
+  --el-color-error: #b23c22;
+  --el-color-info: #6b625b;
+  --el-text-color-primary: #14110f;
+  --el-text-color-regular: #3d3733;
+  --el-text-color-secondary: #6b625b;
+  --el-text-color-placeholder: #a79d95;
+  --el-border-color: #e2dbd4;
+  --el-border-color-light: #ece6e0;
+  --el-border-color-lighter: #f2ede8;
+  --el-border-color-extra-light: #f7f3ef;
+  --el-fill-color-blank: #fffdfb;
+  --el-fill-color-light: #fbf8f5;
+  --el-fill-color-lighter: #fdfbf9;
+  --el-bg-color: #fffdfb;
+  --el-bg-color-overlay: #fffdfb;
+  --el-bg-color-page: #f6f3f0;
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 6px;
+  --el-box-shadow-light: 0 10px 30px -12px rgba(20, 17, 15, 0.18);
+  --el-box-shadow: 0 24px 60px -24px rgba(20, 17, 15, 0.28);
+}

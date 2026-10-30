@@ -10,6 +10,9 @@ import 'element-plus/es/components/loading/style/css'
 
 import App from './App.vue'
 import router from './router'
+// tokens 必须排在 main 前面：main 里全是 var(--xxx)，变量没定义的话
+// 整页会退回 Element Plus 的默认蓝，而不是「缺一点颜色」。
+import './styles/tokens.css'
 import './styles/main.css'
 
 const app = createApp(App);

@@ -9,13 +9,32 @@ defineProps({
 
 <template>
   <div class="empty-state">
+    <div class="empty-mark" aria-hidden="true"></div>
     <div class="empty-text">{{ text }}</div>
     <div v-if="hint" class="empty-hint">{{ hint }}</div>
   </div>
 </template>
 
 <style scoped>
-.empty-state { padding: 40px 0; text-align: center; }
-.empty-text { color: #606266; font-size: 14px; }
-.empty-hint { margin-top: 6px; color: #a8abb2; font-size: 13px; }
+.empty-state {
+  padding: 56px 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 一个空心的方块轮廓，比一个大图标安静 */
+.empty-mark {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 10px;
+  border: 1px dashed var(--ink-4);
+  border-radius: var(--r-sm);
+  transform: rotate(45deg);
+}
+
+.empty-text { color: var(--ink-2); font-size: 14px; }
+.empty-hint { color: var(--ink-4); font-size: 13px; max-width: 40ch; line-height: 1.6; }
 </style>

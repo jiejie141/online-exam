@@ -172,10 +172,19 @@ function optionsPreview(raw) {
   try {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return raw;
-    return arr.map((o) => `${o.key}. ${o.text}`).join('  ');
+    return arr.map((o) => o.key + '. ' + o.text).join('   ');
   } catch {
     return raw;
   }
+}
+
+// 难度用三个小方块表示，而不是数字 —— 「难度 2」需要一个映射表，
+// 三格里有几格亮是一眼的事。
+function difficultyText(n) {
+  if (n >= 4) return '难';
+  if (n >= 3) return '较难';
+  if (n >= 2) return '中';
+  return '易';
 }
 
 onMounted(load);
@@ -183,68 +192,90 @@ onMounted(load);
 
 <template>
   <div>
-    <h2 class="page-title">题库管理</h2>
-    <p class="page-desc">题目是共享的，同一道题可以出现在多场考试里，分值各自指定。</p>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Question Bank</p>
+        <h1 class="page-title">题库管理</h1>
+        <p class="page-desc">题目是共享的，同一道题可以出现在多场考试里，分值各自指定。</p>
+      </div>
+      <el-button type="primary" round @click="openCreate">新建题目</el-button>
+    </div>
 
     <div class="toolbar">
-      <el-input v-model="filter.subject" placeholder="按科目筛选" clearable style="width: 160px" @keyup.enter="onFilter" />
-      <el-select v-model="filter.type" placeholder="按题型筛选" clearable style="width: 140px">
+      <el-input
+        v-model="filter.subject"
+        placeholder="按科目筛选"
+        clearable
+        style="width: 180px"
+        @keyup.enter="onFilter"
+      />
+      <el-select v-model="filter.type" placeholder="按题型筛选" clearable style="width: 150px">
         <el-option label="单选题" value="single" />
         <el-option label="多选题" value="multiple" />
         <el-option label="判断题" value="judge" />
       </el-select>
-      <el-button @click="onFilter">查询</el-button>
+      <el-button round @click="onFilter">查询</el-button>
       <div class="toolbar-spacer" />
-      <el-button type="primary" @click="openCreate">新建题目</el-button>
+      <span class="count-note">共 <strong>{{ total }}</strong> 道题</span>
     </div>
 
-    <el-card shadow="never">
-      <div>
-        <SkeletonBlock v-if="loading" :rows="5" dense />
+    <SkeletonBlock v-if="loading" :rows="5" dense />
 
-        <ErrorState
-          v-else-if="loadError"
-          title="题库加载失败"
-          :message="loadError"
-          @retry="load"
+    <ErrorState
+      v-else-if="loadError"
+      title="题库加载失败"
+      :message="loadError"
+      @retry="load"
+    />
+
+    <div v-else-if="questions.length" class="panel panel-flush">
+      <el-table :data="questions">
+        <el-table-column label="ID" width="64">
+          <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
+        </el-table-column>
+        <el-table-column prop="subject" label="科目" width="110" />
+        <el-table-column label="题型" width="80">
+          <template #default="{ row }">{{ typeText[row.type] || row.type }}</template>
+        </el-table-column>
+        <el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
+        <el-table-column label="选项" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="opts">{{ optionsPreview(row.options) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="答案" width="80">
+          <template #default="{ row }"><span class="answer">{{ row.answer }}</span></template>
+        </el-table-column>
+        <el-table-column label="分值" width="70">
+          <template #default="{ row }"><span class="mono">{{ row.score }}</span></template>
+        </el-table-column>
+        <el-table-column label="难度" width="80">
+          <template #default="{ row }">
+            <span class="diff" :data-level="row.difficulty">{{ difficultyText(row.difficulty) }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- total 是后端 COUNT 出来的总题数；只有超过一页才画分页条 -->
+      <div v-if="total > size" class="pager">
+        <el-pagination
+          layout="total, prev, pager, next"
+          :total="total"
+          :page-size="size"
+          :current-page="page"
+          background
+          @current-change="onPageChange"
         />
-
-        <el-table v-else-if="questions.length" :data="questions" stripe>
-          <el-table-column prop="id" label="ID" width="70" />
-          <el-table-column prop="subject" label="科目" width="90" />
-          <el-table-column label="题型" width="80">
-            <template #default="{ row }">{{ typeText[row.type] || row.type }}</template>
-          </el-table-column>
-          <el-table-column prop="stem" label="题干" min-width="240" show-overflow-tooltip />
-          <el-table-column label="选项" min-width="240" show-overflow-tooltip>
-            <template #default="{ row }">{{ optionsPreview(row.options) }}</template>
-          </el-table-column>
-          <el-table-column prop="answer" label="答案" width="80" />
-          <el-table-column prop="score" label="分值" width="70" />
-          <el-table-column prop="difficulty" label="难度" width="70" />
-        </el-table>
-
-        <EmptyState
-          v-else
-          text="没有符合条件的题目。"
-          hint="清掉上面的筛选条件再查一次，或者点「新建题目」。"
-        />
-
-        <!-- total 是后端 COUNT 出来的总题数；只有超过一页才画分页条 -->
-        <div v-if="total > size" class="pager">
-          <el-pagination
-            layout="total, prev, pager, next"
-            :total="total"
-            :page-size="size"
-            :current-page="page"
-            background
-            @current-change="onPageChange"
-          />
-        </div>
       </div>
-    </el-card>
+    </div>
 
-    <el-dialog v-model="dialogVisible" title="新建题目" width="600px">
+    <EmptyState
+      v-else
+      text="没有符合条件的题目。"
+      hint="清掉上面的筛选条件再查一次，或者点「新建题目」。"
+    />
+
+    <el-dialog v-model="dialogVisible" title="新建题目" width="640px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="88px">
         <el-form-item label="科目" prop="subject">
           <el-input v-model="form.subject" placeholder="如：Java" />
@@ -264,13 +295,17 @@ onMounted(load);
           <div class="opt-list">
             <div v-for="(opt, i) in form.options" :key="opt.key" class="opt-row">
               <span class="opt-key">{{ opt.key }}</span>
-              <el-input v-model="opt.text" :placeholder="`选项 ${opt.key}`" />
+              <el-input v-model="opt.text" :placeholder="'选项 ' + opt.key" />
             </div>
           </div>
         </el-form-item>
 
         <el-form-item label="正确答案">
-          <el-checkbox-group v-if="isMultiple" v-model="form.answerArr" @change="(v) => (form.answer = v.slice().sort().join(''))">
+          <el-checkbox-group
+            v-if="isMultiple"
+            v-model="form.answerArr"
+            @change="(v) => (form.answer = v.slice().sort().join(''))"
+          >
             <el-checkbox v-for="c in answerChoices" :key="c.key" :value="c.key">{{ c.key }}</el-checkbox>
           </el-checkbox-group>
           <el-radio-group v-else v-model="form.answer">
@@ -286,14 +321,64 @@ onMounted(load);
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="doCreate">创建</el-button>
+        <el-button round @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" round :loading="creating" @click="doCreate">创建</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.count-note {
+  font-size: 13px;
+  color: var(--ink-4);
+}
+
+.count-note strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-flush {
+  padding: 8px 10px 14px;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* 选项预览压成一行浅色小字：它是「辅助确认」，不是要读的内容，
+   和题干用同一个字重会把两者拉平。 */
+.opts {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.answer {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: var(--r-xs);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.diff {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.diff[data-level='3'],
+.diff[data-level='4'],
+.diff[data-level='5'] {
+  color: var(--warn);
+}
+
 .opt-list {
   width: 100%;
   display: flex;
@@ -304,13 +389,15 @@ onMounted(load);
 .opt-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .opt-key {
-  width: 18px;
+  width: 16px;
   font-weight: 600;
-  color: #606266;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 .pager {

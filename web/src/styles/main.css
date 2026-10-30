@@ -1,10 +1,6 @@
-/* 全局样式。刻意保持很小 —— 组件库已经提供了大部分视觉，
-   这里只补三件 Element Plus 不管的事：页面底色、容器宽度、以及导航栏。 */
-
-:root {
-  --page-bg: #f5f7fa;
-  --card-radius: 8px;
-}
+/* 全局骨架与通用版式。
+   组件自己的样式写在各自的 <style scoped> 里，这里只放三件东西：
+   页面底色、顶栏、以及跨页面复用的排版原语（标题 / 小标签 / 工具条）。 */
 
 * {
   box-sizing: border-box;
@@ -15,72 +11,130 @@ body,
 #app {
   margin: 0;
   padding: 0;
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
-  background: var(--page-bg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  color: #303133;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 纸面加一层极淡的噪点，纯色大块背景在高分屏上会显得发空。
+     用 data URI 的 SVG 而不是位图：不需要额外请求，也不会被压缩出马赛克。 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.022'/%3E%3C/svg%3E");
 }
 
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* 键盘焦点必须看得见。全局统一成一个 2px 的珊瑚色描边，
+   不在每个组件里各写一遍 —— 漏一处就等于那处不能用键盘。 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* ---------------- 小标签 ----------------
+   全大写 + 字距放开 + 字号压到 11px。这类标签的作用是「分组」，
+   不是「阅读」，所以它要比正文明显更小、更疏。 */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+/* 大号数字：题号、分数、倒计时都用它。
+   tabular-nums 让数字等宽，倒计时跳动时不会左右抖。 */
+.display-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  font-weight: 500;
+  line-height: 0.92;
+}
+
+/* ---------------- 外壳 ---------------- */
 .app-shell {
-  min-height: 100%;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
 .app-header {
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
+  background: rgba(246, 243, 240, 0.86);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid var(--line);
 }
 
 .header-inner {
-  max-width: 1120px;
+  max-width: var(--shell);
   margin: 0 auto;
-  padding: 0 24px;
-  height: 60px;
+  padding: 0 32px;
+  height: var(--header-h);
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 40px;
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.brand-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--accent);
+  /* 方块转 45 度变成菱形，比一个圆点更像「标记」而不是「状态灯」 */
+  transform: rotate(45deg);
+}
+
+.brand-word {
   font-size: 17px;
   font-weight: 600;
-  color: #303133;
-  text-decoration: none;
-  white-space: nowrap;
+  letter-spacing: -0.02em;
 }
 
 .nav {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   flex: 1;
 }
 
 .nav-link {
-  padding: 6px 12px;
-  border-radius: 6px;
-  color: #606266;
+  position: relative;
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  color: var(--ink-3);
   text-decoration: none;
   font-size: 14px;
+  transition: color 0.15s, background 0.15s;
 }
 
 .nav-link:hover {
-  background: #f5f7fa;
-  color: #409eff;
+  color: var(--ink);
+  background: var(--surface-2);
 }
 
-/* 当前页高亮。vue-router 会给匹配上的 RouterLink 加上这个 class */
 .nav-link.router-link-active {
-  color: #409eff;
-  background: #ecf5ff;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
   font-weight: 500;
 }
 
@@ -88,53 +142,84 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .user-name {
-  color: #606266;
+  color: var(--ink-2);
 }
 
 .role-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 12px;
-  border-radius: 3px;
-  background: #ecf5ff;
-  color: #409eff;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 4px 2px;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+
+.link-btn:hover {
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
 }
 
 .app-main {
   flex: 1;
   width: 100%;
-  max-width: 1120px;
+  max-width: var(--shell);
   margin: 0 auto;
-  padding: 24px;
+  padding: 36px 32px 72px;
 }
 
 .app-main-full {
   flex: 1;
+  width: 100%;
 }
 
-/* 页面标题 */
+/* ---------------- 页头 ----------------
+   每个页面顶部都是「小标签 + 大标题 + 一句说明」。
+   大标题用负字距并压紧行高，这是让它「有重量」的最省事的做法。 */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
 .page-title {
-  margin: 0 0 4px;
-  font-size: 20px;
+  margin: 6px 0 0;
+  font-size: 32px;
   font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
 }
 
 .page-desc {
-  margin: 0 0 20px;
-  color: #909399;
-  font-size: 13px;
+  margin: 10px 0 0;
+  max-width: 56ch;
+  color: var(--ink-3);
+  font-size: 14px;
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 20px;
   flex-wrap: wrap;
 }
 
@@ -142,37 +227,133 @@ body {
   flex: 1;
 }
 
-/* 交卷确认框里的未答题号清单。
-   ElMessageBox 的内容挂在 body 上，不是本组件的子节点，
+/* ---------------- 通用面板 ---------------- */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 24px 26px;
+  margin-bottom: 20px;
+}
+
+.panel-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.panel-desc {
+  margin: 0 0 18px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+/* ---------------- 表格 ----------------
+   EP 的表格默认是「一格格线框」，在这里会显得很重。
+   去掉纵向分隔，只留行间一条极淡的线，表头改成小标签。 */
+.el-table {
+  --el-table-border-color: var(--line-soft);
+  --el-table-header-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--surface-2);
+  background: transparent;
+}
+
+.el-table th.el-table__cell {
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.el-table::before,
+.el-table__inner-wrapper::before {
+  display: none;
+}
+
+.el-card {
+  --el-card-border-color: var(--line);
+  --el-card-border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+/* 按钮：主按钮用珊瑚色实心，次要按钮改成描边胶囊。
+   EP 默认的「白色圆角小方块」在这套版式里显得很轻，压不住大标题。 */
+.el-button {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent-strong);
+  --el-button-hover-border-color: var(--accent-strong);
+  --el-button-active-bg-color: var(--accent-strong);
+  --el-button-active-border-color: var(--accent-strong);
+  color: #fff;
+}
+
+.el-button.is-round {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.el-dialog {
+  --el-dialog-border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+}
+
+.el-dialog__title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ---------------- 交卷确认框 ----------------
+   ElMessageBox 的内容挂在 body 上，不是任何组件的子节点，
    所以这段样式只能写在全局（scoped 到不了那里）。 */
 .submit-confirm .mb-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 .submit-confirm .mb-no {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 6px;
-  border-radius: 4px;
-  background: #fdf6ec;
-  color: #b88230;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: var(--r-xs);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
 
-/* ---------------- 窄屏 ---------------- */
-/* 断点定在 900px：再窄一点顶栏的三块（品牌 / 导航 / 用户）
-   就挤成一团了。移动端不追求把桌面版原样塞进去，
-   只要求「能看、能点、不横向滚动」。 */
+/* ---------------- 窄屏 ----------------
+   断点 900px：再窄一点顶栏三块就挤成一团。
+   移动端不追求把桌面版原样塞进去，只要求能看、能点、不横向滚动。 */
 @media (max-width: 900px) {
   .header-inner {
     height: auto;
-    padding: 10px 16px;
+    padding: 12px 16px;
     gap: 12px;
     flex-wrap: wrap;
   }
@@ -181,6 +362,7 @@ body {
     order: 3;
     flex-basis: 100%;
     overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .nav-link {
@@ -189,26 +371,32 @@ body {
 
   .user-area {
     margin-left: auto;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .user-name {
-    max-width: 8em;
+    max-width: 6em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .app-main {
-    padding: 16px;
+    padding: 24px 16px 56px;
+  }
+
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 18px;
   }
 
   .page-title {
-    font-size: 18px;
+    font-size: 26px;
   }
 
-  /* 表格在窄屏下不换行会撑出横向滚动条，横向滚动又把整页拖歪。
-     让工具栏里的固定宽度控件先学会收缩。 */
   .toolbar > .el-input,
   .toolbar > .el-select {
     width: 100% !important;

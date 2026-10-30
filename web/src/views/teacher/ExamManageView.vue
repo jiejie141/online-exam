@@ -162,7 +162,7 @@ async function doCompose() {
     const added = await addQuestionsToExam(composeExam.value.id, selectedQuestionIds.value, composeScore.value);
     // 返回值是实际加进去的条数 —— 重复加的题会被唯一键挡掉并跳过，
     // 所以「选了几道」和「加进去几道」可能不一样，要如实告诉用户。
-    ElMessage.success(`已加入 ${added} 道题`);
+    ElMessage.success('已加入 ' + added + ' 道题');
     composeVisible.value = false;
     await load();
   } catch (e) {
@@ -175,7 +175,7 @@ async function doCompose() {
 async function doPublish(exam) {
   try {
     await ElMessageBox.confirm(
-      `发布后学生就能在时间窗内进入「${exam.title}」答题了。确定发布吗？`,
+      '发布后学生就能在时间窗内进入「' + exam.title + '」答题了。确定发布吗？',
       '确认发布',
       { confirmButtonText: '发布', cancelButtonText: '取消', type: 'info' }
     );
@@ -194,7 +194,7 @@ async function doPublish(exam) {
 async function doClose(exam) {
   try {
     await ElMessageBox.confirm(
-      `结束后学生不能再进入「${exam.title}」，已经交的卷子不受影响。确定结束吗？`,
+      '结束后学生不能再进入「' + exam.title + '」，已经交的卷子不受影响。确定结束吗？',
       '确认结束',
       { confirmButtonText: '结束考试', cancelButtonText: '取消', type: 'warning' }
     );
@@ -221,85 +221,89 @@ onMounted(load);
 
 <template>
   <div>
-    <h2 class="page-title">考试管理</h2>
-    <p class="page-desc">建考试 → 组卷 → 发布，三步之后学生才能看到这场考试。</p>
-
-    <div class="toolbar">
-      <el-button type="primary" @click="openCreate">新建考试</el-button>
-      <el-button @click="load">刷新</el-button>
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Exams</p>
+        <h1 class="page-title">考试管理</h1>
+        <p class="page-desc">建考试 → 组卷 → 发布，三步之后学生才能看到这场考试。</p>
+      </div>
+      <div class="head-actions">
+        <el-button type="primary" round @click="openCreate">新建考试</el-button>
+        <el-button round @click="load">刷新</el-button>
+      </div>
     </div>
 
-    <el-card shadow="never">
-      <div>
-        <SkeletonBlock v-if="loading" :rows="5" dense />
+    <SkeletonBlock v-if="loading" :rows="5" dense />
 
-        <ErrorState
-          v-else-if="loadError"
-          title="考试列表加载失败"
-          :message="loadError"
-          @retry="load"
+    <ErrorState
+      v-else-if="loadError"
+      title="考试列表加载失败"
+      :message="loadError"
+      @retry="load"
+    />
+
+    <div v-else-if="exams.length" class="panel panel-flush">
+      <el-table :data="exams">
+        <el-table-column label="ID" width="70">
+          <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
+        </el-table-column>
+        <el-table-column prop="title" label="考试名称" min-width="200" />
+        <el-table-column prop="subject" label="科目" width="110" />
+        <el-table-column label="开始" width="160">
+          <template #default="{ row }"><span class="mono">{{ fmtTime(row.startAt) }}</span></template>
+        </el-table-column>
+        <el-table-column label="结束" width="160">
+          <template #default="{ row }"><span class="mono">{{ fmtTime(row.endAt) }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <span class="status" :class="'status-' + row.status">
+              {{ statusText[row.status] || row.status }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="240" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="openCompose(row)">组卷</el-button>
+            <el-button
+              v-if="row.status === 'draft'"
+              link
+              type="primary"
+              size="small"
+              @click="doPublish(row)"
+            >
+              发布
+            </el-button>
+            <el-button
+              v-if="row.status === 'published'"
+              link
+              type="warning"
+              size="small"
+              @click="doClose(row)"
+            >
+              结束
+            </el-button>
+            <el-button link type="primary" size="small" @click="gotoStats(row)">成绩统计</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 分页条只在真的不止一页时出现：一页装得下的时候它只是一行噪音。
+           total 是后端 COUNT 出来的总数，不是本页条数 —— 拿本页条数画页码
+           会出现「永远只有 1 页」的假象。 -->
+      <div v-if="total > size" class="pager">
+        <el-pagination
+          layout="total, prev, pager, next"
+          :total="total"
+          :page-size="size"
+          :current-page="page"
+          background
+          @current-change="onPageChange"
         />
-
-        <el-table v-else-if="exams.length" :data="exams" stripe>
-          <el-table-column prop="id" label="ID" width="70" />
-          <el-table-column prop="title" label="考试名称" min-width="180" />
-          <el-table-column prop="subject" label="科目" width="100" />
-          <el-table-column label="开始" width="150">
-            <template #default="{ row }">{{ fmtTime(row.startAt) }}</template>
-          </el-table-column>
-          <el-table-column label="结束" width="150">
-            <template #default="{ row }">{{ fmtTime(row.endAt) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="90">
-            <template #default="{ row }">
-              <el-tag :type="statusType[row.status] || 'info'" size="small">
-                {{ statusText[row.status] || row.status }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openCompose(row)">组卷</el-button>
-              <el-button
-                v-if="row.status === 'draft'"
-                link
-                type="primary"
-                size="small"
-                @click="doPublish(row)"
-              >
-                发布
-              </el-button>
-              <el-button
-                v-if="row.status === 'published'"
-                link
-                type="warning"
-                size="small"
-                @click="doClose(row)"
-              >
-                结束
-              </el-button>
-              <el-button link type="primary" size="small" @click="gotoStats(row)">成绩统计</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <EmptyState v-else text="还没有考试。" hint="点上面的「新建考试」开始：建考试 → 组卷 → 发布。" />
-
-        <!-- 分页条只在真的不止一页时出现：一页装得下的时候它只是一行噪音。
-             total 是后端 COUNT 出来的总数，不是本页条数 —— 拿本页条数画页码
-             会出现「永远只有 1 页」的假象。 -->
-        <div v-if="total > size" class="pager">
-          <el-pagination
-            layout="total, prev, pager, next"
-            :total="total"
-            :page-size="size"
-            :current-page="page"
-            background
-            @current-change="onPageChange"
-          />
-        </div>
       </div>
-    </el-card>
+    </div>
+
+    <EmptyState v-else text="还没有考试。" hint="点上面的「新建考试」开始：建考试 → 组卷 → 发布。" />
 
     <!-- 新建考试 -->
     <el-dialog v-model="createVisible" title="新建考试" width="520px">
@@ -331,13 +335,13 @@ onMounted(load);
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="doCreate">创建</el-button>
+        <el-button round @click="createVisible = false">取消</el-button>
+        <el-button type="primary" round :loading="creating" @click="doCreate">创建</el-button>
       </template>
     </el-dialog>
 
     <!-- 组卷 -->
-    <el-dialog v-model="composeVisible" title="组卷" width="640px">
+    <el-dialog v-model="composeVisible" title="组卷" width="720px">
       <p class="dialog-tip">
         给「{{ composeExam && composeExam.title }}」选题。分值在这里指定，
         同一道题在不同考试里可以给不同权重。
@@ -347,14 +351,21 @@ onMounted(load);
           <el-input-number v-model="composeScore" :min="1" :max="100" />
         </el-form-item>
       </el-form>
-      <el-table :data="questions" max-height="320" size="small" @selection-change="(v) => (selectedQuestionIds = v.map((x) => x.id))">
+      <el-table
+        :data="questions"
+        max-height="320"
+        size="small"
+        @selection-change="(v) => (selectedQuestionIds = v.map((x) => x.id))"
+      >
         <el-table-column type="selection" width="46" />
-        <el-table-column prop="id" label="ID" width="64" />
+        <el-table-column label="ID" width="64">
+          <template #default="{ row }"><span class="mono">{{ row.id }}</span></template>
+        </el-table-column>
         <el-table-column prop="stem" label="题干" min-width="240" show-overflow-tooltip />
         <el-table-column label="类型" width="90">
           <template #default="{ row }">{{ typeText[row.type] || row.type }}</template>
         </el-table-column>
-        <el-table-column prop="subject" label="科目" width="90" />
+        <el-table-column prop="subject" label="科目" width="100" />
       </el-table>
       <!-- 组卷弹窗一次只列 100 道题（后端单页上限）。题库真的超过 100 道时
            必须说出来，否则老师会以为「我的题库就这么点题」，然后去重复出题。 -->
@@ -363,40 +374,92 @@ onMounted(load);
         要选更早的题，请先去「题库管理」确认题目还在。
       </p>
       <div class="compose-sum">
-        已选 {{ selectedQuestionIds.length }} 题，合计 {{ composeTotal }} 分
+        已选 <strong>{{ selectedQuestionIds.length }}</strong> 题，合计
+        <strong>{{ composeTotal }}</strong> 分
       </div>
       <template #footer>
-        <el-button @click="composeVisible = false">取消</el-button>
-        <el-button type="primary" :loading="composing" @click="doCompose">加入试卷</el-button>
+        <el-button round @click="composeVisible = false">取消</el-button>
+        <el-button type="primary" round :loading="composing" @click="doCompose">加入试卷</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.head-actions {
+  display: flex;
+  gap: 10px;
+  flex: none;
+}
+
+/* 表格外面那层面板不要内边距：表格自己会撑到边缘，
+   加内边距反而让表头缩进去一截，跟页头对不齐。 */
+.panel-flush {
+  padding: 8px 10px 14px;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* 状态用一个小圆点 + 文字，而不是 el-tag 的色块 ——
+   一列全是彩色药丸会抢走「考试名称」的注意力。 */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+
+.status-published::before { background: var(--ok); }
+.status-draft::before { background: var(--warn); }
+.status-closed::before { background: var(--ink-4); }
+
 .unit {
   margin-left: 8px;
-  color: #909399;
+  color: var(--ink-4);
   font-size: 13px;
 }
 
 .dialog-tip {
   margin: 0 0 16px;
-  color: #909399;
+  color: var(--ink-3);
   font-size: 13px;
   line-height: 1.6;
 }
 
 .compose-sum {
-  margin-top: 12px;
+  margin-top: 14px;
   text-align: right;
-  color: #606266;
+  color: var(--ink-3);
   font-size: 13px;
+}
+
+.compose-sum strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .pager {
   display: flex;
   justify-content: flex-end;
   margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .head-actions {
+    width: 100%;
+  }
 }
 </style>
