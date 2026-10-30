@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from '@/utils/feedback'
-import { listExams, createExam, publishExam, closeExam, listQuestions, addQuestionsToExam } from '@/api'
+import { listExams, createExam, publishExam, closeExam, listQuestions, addQuestionsToExam, autoCompose } from '@/api'
 import SkeletonBlock from '@/components/SkeletonBlock.vue'
 import ErrorState from '@/components/ErrorState.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -39,6 +39,61 @@ const composing = ref(false);
 const composeExam = ref(null);
 const selectedQuestionIds = ref([]);
 const composeScore = ref(10);
+
+// ---- 自动组卷 ----
+// 与手工组卷的区别：这里给的是「配额」，实际抽到哪几道由题库随机决定。
+// 题型比例是教学上有意义的（单选考记忆、多选考辨析），所以不是「随机抽 N 道」。
+const autoVisible = ref(false);
+const autoBusy = ref(false);
+const autoExam = ref(null);
+const autoScore = ref(10);
+const autoResult = ref(null);
+// count = 0 的行不提交：老师只想要单选题时，不该被「判断题 0 道」这种配额卡住
+const autoQuotas = reactive([
+  { type: 'single', label: '单选题', difficulty: null, count: 10 },
+  { type: 'multiple', label: '多选题', difficulty: null, count: 5 },
+  { type: 'judge', label: '判断题', difficulty: null, count: 5 }
+]);
+
+function openAuto(exam) {
+  autoExam.value = exam;
+  autoResult.value = null;
+  autoScore.value = 10;
+  autoQuotas.forEach((q) => {
+    q.count = q.type === 'single' ? 10 : 5;
+    q.difficulty = null;
+  });
+  autoVisible.value = true;
+}
+
+const autoTotal = computed(() => autoQuotas.reduce((s, q) => s + (q.count || 0), 0));
+
+async function doAuto() {
+  const quotas = autoQuotas
+    .filter((q) => q.count > 0)
+    .map((q) => ({ type: q.type, difficulty: q.difficulty, count: q.count }));
+  if (!quotas.length) {
+    ElMessage.warning('至少给一个题型分配数量');
+    return;
+  }
+  autoBusy.value = true;
+  try {
+    const r = await autoCompose(autoExam.value.id, {
+      subject: autoExam.value.subject,
+      quotas,
+      score: autoScore.value
+    });
+    autoResult.value = r;
+    ElMessage.success('已加入 ' + r.added + ' 道题');
+    await load();
+  } catch (e) {
+    // 题库不够时后端会明确说「只有 3 道可用，本次要抽 10 道」——
+    // 这句话比「组卷失败」有用得多，原样展示
+    ElMessage.error(e.message);
+  } finally {
+    autoBusy.value = false;
+  }
+}
 
 const statusText = { draft: '草稿', published: '已发布', closed: '已结束' };
 // 题库里存的是 single/multiple/judge，直接绑到表格上会露出原始英文；
@@ -262,9 +317,18 @@ onMounted(load);
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openCompose(row)">组卷</el-button>
+            <el-button
+              v-if="row.status === 'draft'"
+              link
+              type="primary"
+              size="small"
+              @click="openAuto(row)"
+            >
+              自动组卷
+            </el-button>
             <el-button
               v-if="row.status === 'draft'"
               link
@@ -341,6 +405,47 @@ onMounted(load);
     </el-dialog>
 
     <!-- 组卷 -->
+    <el-dialog v-model="autoVisible" title="自动组卷" width="620px">
+      <p class="dialog-tip">
+        按题型配额从「{{ autoExam && autoExam.subject }}」题库中随机抽题，只从你自己的题库里抽。
+        数量不足时会明确告诉你缺多少，不会悄悄少抽。
+      </p>
+      <el-form label-width="96px">
+        <el-form-item label="每题分值">
+          <el-input-number v-model="autoScore" :min="1" :max="100" />
+        </el-form-item>
+      </el-form>
+      <el-table :data="autoQuotas" size="small">
+        <el-table-column prop="label" label="题型" width="100" />
+        <el-table-column label="难度" width="160">
+          <template #default="{ row }">
+            <el-select v-model="row.difficulty" placeholder="不限" clearable size="small">
+              <el-option label="易" :value="1" />
+              <el-option label="中" :value="2" />
+              <el-option label="难" :value="3" />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="数量" width="150">
+          <template #default="{ row }">
+            <el-input-number v-model="row.count" :min="0" :max="100" size="small" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <p class="auto-total">合计 <strong>{{ autoTotal }}</strong> 道</p>
+      <div v-if="autoResult" class="auto-done">
+        已抽到：
+        <span v-for="p in autoResult.picked" :key="p.type + String(p.difficulty)">
+          {{ p.type }} {{ p.count }} 道
+        </span>
+        <span class="auto-note">（实际写入 {{ autoResult.added }} 道）</span>
+      </div>
+      <template #footer>
+        <el-button round @click="autoVisible = false">关闭</el-button>
+        <el-button type="primary" round :loading="autoBusy" @click="doAuto">开始抽题</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="composeVisible" title="组卷" width="720px">
       <p class="dialog-tip">
         给「{{ composeExam && composeExam.title }}」选题。分值在这里指定，
@@ -437,6 +542,32 @@ onMounted(load);
   color: var(--ink-3);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.auto-total {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.auto-total strong,
+.auto-done strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-done {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.auto-done span {
+  margin-right: 10px;
+}
+
+.auto-note {
+  color: var(--ink-4);
 }
 
 .compose-sum {

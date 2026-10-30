@@ -40,11 +40,29 @@ CREATE TABLE IF NOT EXISTS question (
   answer     VARCHAR(64)  NOT NULL COMMENT '单选 A / 多选 ABD / 判断 T|F',
   score      INT          NOT NULL DEFAULT 5 COMMENT '默认分值',
   difficulty TINYINT      NOT NULL DEFAULT 1 COMMENT '1 易 2 中 3 难',
+  -- 来源溯源（V4 加入）。批量导入之后，"这道题从哪来的"必须能回答 ——
+  -- 答案错、题干有争议、版权方找来，都要能顺着这四列回到出处。
+  external_id VARCHAR(128) NULL COMMENT '源系统里的题目 ID',
+  source      VARCHAR(16)  NOT NULL DEFAULT 'manual' COMMENT 'manual|ceval|cmmlu|mmlu|excel|school',
+  source_ref  VARCHAR(255) NULL COMMENT '数据集版本/文件名+行号/授权编号',
+  license     VARCHAR(64)  NULL COMMENT '如 CC BY-NC-SA 4.0；NULL = 未知，不代表可随便用',
+  -- 去重指纹：题型 + 归一化题干 + 选项的 SHA-256。
+  -- 刻意不含 answer —— 同题干不同答案要能被识别成"答案冲突"，而不是两道理所当然并存的题。
+  -- 允许 NULL：V4 之前的历史题没法在 SQL 里算出与 Java 侧一致的指纹，
+  -- 由导入服务在首次导入时回填。MySQL 唯一索引允许多个 NULL，历史行不会互相打架。
+  content_hash CHAR(64)   NULL COMMENT 'SHA-256 十六进制；NULL = 历史数据未登记指纹',
   created_by BIGINT       NULL,
   created_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
-  -- 组卷时按"科目 + 题型"筛题，走这条索引
-  KEY idx_question_subject_type (subject, type)
+  -- 组卷时按"科目 + 题型"筛题，走这条索引（V4 起被 idx_question_owner_pick 覆盖，
+  -- 保留是因为 V1 已经建过，删索引属于另一件需要单独评估的事）
+  KEY idx_question_subject_type (subject, type),
+  -- 自动组卷：WHERE created_by=? AND subject=? AND type=? AND difficulty=?
+  -- created_by 选择性最高且每次查询都带，放最左
+  KEY idx_question_owner_pick (created_by, subject, type, difficulty),
+  -- 并发导入的最终兜底。为什么是 (created_by, content_hash) 而不是 content_hash：
+  -- 题库是老师的私有资源，同一道题出现在两个老师库里是正常的
+  UNIQUE KEY uk_question_owner_hash (created_by, content_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ---------- 考试 ----------

@@ -1,0 +1,6 @@
+{"subject":"计算机网络","type":"single","stem":"这一行是完全合法的，用来证明「一行坏数据不会传染其余行」","options":[{"key":"A","text":"对"},{"key":"B","text":"错"}],"answer":"A","difficulty":1}
+{"subject":"计算机网络","type":"single","stem":"这一行的答案是 Z，而选项只有 A、B","options":[{"key":"A","text":"甲"},{"key":"B","text":"乙"}],"answer":"Z"}
+{"subject":"计算机网络","type":"judge","stem":"这一行被标成判断题，却带着 A–D 四个真实选项","options":[{"key":"A","text":"甲"},{"key":"B","text":"乙"},{"key":"C","text":"丙"},{"key":"D","text":"丁"}],"answer":"T"}
+{"subject":"计算机网络","type":"single","stem":"这一行的难度是 5","options":[{"key":"A","text":"甲"},{"key":"B","text":"乙"}],"answer":"A","difficulty":5}
+{"subject":"计算机网络","type":"single","stem":"这一行的答案用了 0 基下标","options":[{"key":"A","text":"甲"},{"key":"B","text":"乙"}],"answer":0}
+{这一行不是合法的 JSON

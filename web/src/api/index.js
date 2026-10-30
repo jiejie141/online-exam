@@ -39,6 +39,26 @@ export const listQuestions = (params) => http.get('/teacher/questions', { params
 
 export const createQuestion = (payload) => http.post('/teacher/questions', payload);
 
+// 改题是**整体覆盖**（PUT），不是部分更新。前端本来就把整张表单提交上来，
+// 用 PATCH 语义反而要判断"哪个字段没传"，而这里的"没传"是有含义的
+// （判断题不传 options、不传 score 表示用默认值）。
+export const updateQuestion = (id, payload) => http.put(`/teacher/questions/${id}`, payload);
+
+// 删题。被任何试卷引用时后端会拒绝并说明在哪份卷子里 —— 那句错误信息
+// 要原样给到用户，不要改写成"删除失败"。
+export const deleteQuestion = (id) => http.delete(`/teacher/questions/${id}`);
+
+// 批量导入。dryRun 默认 true（后端也是这个默认值）——
+// 预览返回的报告和真导入是同一个结构，只有 inserted 的含义从
+// 「将会入库」变成「已入库」。调这个接口的页面必须先把报告摆给人看，
+// 再让人点第二次「确认导入」，不能一次点完就写库。
+export const importQuestions = (payload) => http.post('/teacher/questions/import', payload);
+
+// 按配额自动组卷。quotas 形如 [{type:'single',difficulty:1,count:10}]，
+// difficulty 传 null 表示不限难度；subject 不传就用这场考试的科目。
+export const autoCompose = (examId, payload) =>
+  http.post(`/teacher/exams/${examId}/auto-compose`, payload);
+
 export const addQuestionsToExam = (examId, questionIds, score) =>
   http.post(`/teacher/exams/${examId}/questions`, { questionIds, score });
 

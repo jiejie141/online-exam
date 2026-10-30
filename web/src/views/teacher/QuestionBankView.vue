@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage } from '@/utils/feedback'
-import { listQuestions, createQuestion } from '@/api'
+import { ElMessage, ElMessageBox } from '@/utils/feedback'
+import { listQuestions, createQuestion, updateQuestion, deleteQuestion, importQuestions } from '@/api'
 import SkeletonBlock from '@/components/SkeletonBlock.vue'
 import ErrorState from '@/components/ErrorState.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -14,6 +14,20 @@ const filter = reactive({ subject: '', type: '' });
 const dialogVisible = ref(false);
 const formRef = ref(null);
 const creating = ref(false);
+// null = 新建；有值 = 正在改这一道题。用一个变量区分两种模式，
+// 而不是两个独立的对话框 —— 两个框的字段、校验、提交前处理完全一样，
+// 分成两份之后第一件事就是它们开始不一样。
+const editingId = ref(null);
+
+// ---- 批量导入 ----
+// 交互刻意分成两步：预览 → 确认导入。
+// 「确认导入」在预览通过校验之前是禁用的 —— 因为这一步的参数是一整批数据，
+// 一旦写错，清理成本远高于多点一次按钮。批量操作的默认值应该是「什么都不做」。
+const importVisible = ref(false);
+const importText = ref('');
+const importBusy = ref(false);
+const importReport = ref(null);
+const importPreviewed = ref(false);
 
 const form = reactive({
   subject: '',
@@ -99,6 +113,7 @@ function onFilter() {
 }
 
 function openCreate() {
+  editingId.value = null;
   form.subject = '';
   form.type = 'single';
   form.stem = '';
@@ -119,6 +134,68 @@ function openCreate() {
 function onTypeChange() {
   form.answer = '';
   form.answerArr = [];
+}
+
+/**
+ * 进入编辑态。
+ *
+ * 判断题的 options 在库里是 null，表单里要补回四个空行 ——
+ * 否则用户切到单选题时看不到选项输入框，会以为这个框坏了。
+ */
+function openEdit(row) {
+  editingId.value = row.id;
+  form.subject = row.subject;
+  form.type = row.type;
+  form.stem = row.stem;
+  form.answer = row.answer || '';
+  form.answerArr = row.type === 'multiple' ? String(row.answer || '').split('') : [];
+  form.score = row.score ?? 5;
+  form.difficulty = row.difficulty ?? 1;
+
+  let parsed = [];
+  if (row.options) {
+    try {
+      const arr = JSON.parse(row.options);
+      if (Array.isArray(arr)) parsed = arr;
+    } catch {
+      // 库里的 options 坏了不该让整个页面打不开：退回空选项，
+      // 用户重新填一遍就能救回来。这里不弹错，因为下面已经有提示
+      parsed = [];
+    }
+  }
+  form.options = parsed.length
+    ? parsed
+    : [
+        { key: 'A', text: '' },
+        { key: 'B', text: '' },
+        { key: 'C', text: '' },
+        { key: 'D', text: '' }
+      ];
+  dialogVisible.value = true;
+}
+
+/**
+ * 删题。二次确认是必须的 —— 题库里一道题可能已被多场考试引用，
+ * 删掉它带来的连锁反应比"少一个按钮"严重得多。后端还会再拦一道。
+ */
+async function doDelete(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除第 ${row.id} 题吗？已被试卷引用的题会被后端拒绝，并说明在哪一份卷子里。`,
+      '删除题目',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    );
+  } catch {
+    return;
+  }
+  try {
+    await deleteQuestion(row.id);
+    ElMessage.success('已删除');
+    await load();
+  } catch (e) {
+    // 后端的拒绝理由（"还在 N 份试卷里"）比"删除失败"有用得多，原样展示
+    ElMessage.error(e.message);
+  }
 }
 
 async function doCreate() {
@@ -148,7 +225,7 @@ async function doCreate() {
 
   creating.value = true;
   try {
-    await createQuestion({
+    const payload = {
       subject: form.subject,
       type: form.type,
       stem: form.stem,
@@ -156,8 +233,14 @@ async function doCreate() {
       answer: form.answer,
       score: form.score,
       difficulty: form.difficulty
-    });
-    ElMessage.success('题目已创建');
+    };
+    if (editingId.value === null) {
+      await createQuestion(payload);
+      ElMessage.success('题目已创建');
+    } else {
+      await updateQuestion(editingId.value, payload);
+      ElMessage.success('已保存');
+    }
     dialogVisible.value = false;
     await load();
   } catch (e) {
@@ -187,6 +270,53 @@ function difficultyText(n) {
   return '易';
 }
 
+// ---------------- 批量导入 ----------------
+
+function openImport() {
+  importVisible.value = true;
+  importReport.value = null;
+  importPreviewed.value = false;
+}
+
+async function runImport(dryRun) {
+  if (!importText.value.trim()) {
+    ElMessage.warning('先粘贴 JSONL 内容，每行一个 JSON 对象');
+    return;
+  }
+  importBusy.value = true;
+  try {
+    const report = await importQuestions({ jsonl: importText.value, dryRun });
+    importReport.value = report;
+    if (dryRun) {
+      importPreviewed.value = true;
+      if (report.clean) {
+        ElMessage.success(`校验通过，${report.inserted} 道题可以导入`);
+      } else {
+        ElMessage.warning(`${report.issues.length} 条未通过校验，改完再预览一次`);
+      }
+      return;
+    }
+    ElMessage.success(`已导入 ${report.inserted} 道题`);
+    importVisible.value = false;
+    importReport.value = null;
+    importPreviewed.value = false;
+    importText.value = '';
+    await load();
+  } catch (e) {
+    // 后端在真导入遇到坏数据时会整批拒绝，错误信息里带「第 N 行: 原因」。
+    // 这条信息比任何前端校验都准确，原样展示，不要改写成「导入失败」
+    ElMessage.error(e.message);
+  } finally {
+    importBusy.value = false;
+  }
+}
+
+// 预览通过之前不允许确认导入。判据用后端返回的 clean，
+// 而不是前端自己数 issues —— 判定规则只应该有一份
+const canConfirmImport = computed(
+  () => importPreviewed.value && importReport.value && importReport.value.clean
+);
+
 onMounted(load);
 </script>
 
@@ -198,7 +328,10 @@ onMounted(load);
         <h1 class="page-title">题库管理</h1>
         <p class="page-desc">题目是共享的，同一道题可以出现在多场考试里，分值各自指定。</p>
       </div>
-      <el-button type="primary" round @click="openCreate">新建题目</el-button>
+      <div class="head-actions">
+        <el-button round @click="openImport">批量导入</el-button>
+        <el-button type="primary" round @click="openCreate">新建题目</el-button>
+      </div>
     </div>
 
     <div class="toolbar">
@@ -254,6 +387,15 @@ onMounted(load);
             <span class="diff" :data-level="row.difficulty">{{ difficultyText(row.difficulty) }}</span>
           </template>
         </el-table-column>
+        <!-- 在加这两列之前，这个页面的所有动作都是"新增"。
+             一道题录错了只能再建一道正确的，错的那道永远留在库里、
+             还会被自动组卷抽中 —— 这就是"只能往前、不能回头"的代价。 -->
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <!-- total 是后端 COUNT 出来的总题数；只有超过一页才画分页条 -->
@@ -275,7 +417,15 @@ onMounted(load);
       hint="清掉上面的筛选条件再查一次，或者点「新建题目」。"
     />
 
-    <el-dialog v-model="dialogVisible" title="新建题目" width="640px">
+    <!-- 新建与编辑共用一个对话框：字段、校验、提交前处理完全一致，
+         分成两个框之后第一件事就是它们开始不一样。
+         关闭时把 editingId 清掉，否则下次点"新建"会带着上次的 id 去改题。 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId === null ? '新建题目' : '编辑题目'"
+      width="640px"
+      @closed="editingId = null"
+    >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="88px">
         <el-form-item label="科目" prop="subject">
           <el-input v-model="form.subject" placeholder="如：Java" />
@@ -317,18 +467,170 @@ onMounted(load);
           <el-input-number v-model="form.score" :min="1" :max="100" />
         </el-form-item>
         <el-form-item label="难度">
-          <el-input-number v-model="form.difficulty" :min="1" :max="5" />
+          <!-- 上限是 3 不是 5：库和后端的口径都是「1 易 2 中 3 难」，
+               而自动组卷按 1/2/3 筛。填到 4/5 的题只有在「不限难度」时才会被抽中，
+               却看不出哪里错 —— 把上限收到 3，问题在做题时就暴露。 -->
+          <el-input-number v-model="form.difficulty" :min="1" :max="3" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button round @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" round :loading="creating" @click="doCreate">创建</el-button>
+        <el-button type="primary" round :loading="creating" @click="doCreate">
+          {{ editingId === null ? '创建' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量导入：预览 → 确认导入，两步不能合并 -->
+    <el-dialog v-model="importVisible" title="批量导入题库" width="760px">
+      <p class="import-hint">
+        每行一个 JSON 对象。先点「预览」——它会把解析、校验、去重、答案冲突全部跑一遍，
+        但<b>一个字都不写库</b>。确认无误后再点「确认导入」。
+      </p>
+      <el-input
+        v-model="importText"
+        type="textarea"
+        :rows="9"
+        resize="vertical"
+        placeholder='{"subject":"计算机网络","type":"single","stem":"TCP 三次握手的第二步是？","options":[{"key":"A","text":"SYN"},{"key":"B","text":"SYN+ACK"}],"answer":"B","difficulty":1}'
+        class="mono-input"
+      />
+
+      <div v-if="importReport" class="import-report">
+        <div class="report-line">
+          <span>总行数 <strong>{{ importReport.total }}</strong></span>
+          <span>可入库 <strong>{{ importReport.inserted }}</strong></span>
+          <span>重复 <strong>{{ importReport.duplicate }}</strong></span>
+          <span :class="{ 'is-bad': importReport.conflicting > 0 }">
+            答案冲突 <strong>{{ importReport.conflicting }}</strong>
+          </span>
+          <span v-if="importReport.backfilled">回填指纹 <strong>{{ importReport.backfilled }}</strong></span>
+        </div>
+
+        <div v-if="importReport.conflicts.length" class="report-block">
+          <h4>答案冲突 —— 这些题的答案和库里已有的不一致，需要你来裁决</h4>
+          <p class="report-note">
+            导入不会覆盖已有答案：覆盖会让「已按旧答案判过的卷」和新答案之间悄悄产生矛盾。
+          </p>
+          <ul>
+            <li v-for="c in importReport.conflicts" :key="c.lineNo">
+              第 {{ c.lineNo }} 行 · 库里 <span class="mono">{{ c.existingAnswer }}</span>
+              → 本次 <span class="mono">{{ c.incomingAnswer }}</span> · {{ c.stem }}
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="importReport.issues.length" class="report-block is-bad">
+          <h4>未通过校验 {{ importReport.issues.length }} 条 —— 整批不会写入</h4>
+          <ul>
+            <li v-for="i in importReport.issues" :key="i.lineNo + i.reason">
+              <span v-if="i.lineNo">第 {{ i.lineNo }} 行：</span>{{ i.reason }}
+            </li>
+          </ul>
+          <p v-if="importReport.issuesTruncated" class="report-note">
+            只显示了前 {{ importReport.issues.length }} 条，实际更多。分批导入更容易定位。
+          </p>
+        </div>
+
+        <div v-if="importReport.samples.length" class="report-block">
+          <h4>抽样核对（真实题库里确实有错题，建议扫一眼）</h4>
+          <ul>
+            <li v-for="s in importReport.samples" :key="s.lineNo">
+              第 {{ s.lineNo }} 行 · {{ s.subject }} · {{ s.type }} · {{ s.stem }}
+              → <span class="mono">{{ s.answer }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button round @click="importVisible = false">取消</el-button>
+        <el-button round :loading="importBusy" @click="runImport(true)">预览</el-button>
+        <el-button
+          type="primary"
+          round
+          :disabled="!canConfirmImport"
+          :loading="importBusy"
+          @click="runImport(false)"
+        >
+          确认导入
+        </el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.import-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.7;
+}
+
+.mono-input :deep(textarea) {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.import-report {
+  margin-top: 12px;
+  border-top: 1px solid var(--line, #e5e7eb);
+  padding-top: 10px;
+  font-size: 13px;
+}
+
+.report-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--ink-3);
+}
+
+.report-line strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.report-line .is-bad strong {
+  color: #c0392b;
+}
+
+.report-block {
+  margin-top: 10px;
+}
+
+.report-block h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.report-block.is-bad h4 {
+  color: #c0392b;
+}
+
+.report-block ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.report-note {
+  margin: 4px 0 0;
+  color: var(--ink-4);
+  font-size: 12px;
+}
+
 .count-note {
   font-size: 13px;
   color: var(--ink-4);

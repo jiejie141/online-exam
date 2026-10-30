@@ -1,5 +1,6 @@
 package com.jiejie.exam.exam;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.jiejie.exam.cache.PaperCache;
@@ -15,7 +16,10 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 老师端：建考试、组卷、发布、结束。
@@ -213,6 +217,26 @@ public class ExamService {
     }
 
     public Long createQuestion(Question question) {
+        // 归属必须落库：题目的可读性完全靠 created_by 过滤，
+        // 存成 NULL 的题目从此谁都看不见，等于写进了一个黑洞
+        if (question.getCreatedBy() == null) {
+            throw new BusinessException("题目必须记录出题老师");
+        }
+        validateQuestionContent(question);
+        questionMapper.insert(question);
+        return question.getId();
+    }
+
+    /**
+     * 题目内容校验：题型、分值、难度、答案与选项的自洽性。
+     *
+     * <p>建题和改题共用同一份。分开写两份的后果很具体：改题那条路会漏掉某一条
+     * 校验，于是"建的时候进不去的坏题"能从"改"这条路进去 —— 而坏题不会报错，
+     * 只会让全班都拿不到那道题的分。
+     *
+     * <p>返回解析好的题型：调用方偶尔还要用它（例如日志里记一笔）。
+     */
+    private static QuestionType validateQuestionContent(Question question) {
         // 答案必须先校验，否则题目进了库才发现判不了分。
         //
         // QuestionType.of 抛的是 IllegalArgumentException，直接漏到
@@ -234,6 +258,13 @@ public class ExamService {
         if (question.getDifficulty() != null && question.getDifficulty() < 1) {
             throw new BusinessException("题目难度必须大于等于 1");
         }
+        // 上限也是 3。库注释写的是「1 易 2 中 3 难」，但这里原来只判了下界 ——
+        // 于是页面上的难度输入框能填到 5（前端 max=5），建出来的题难度是 4/5。
+        // 后果不是报错，而是<b>这类题按难度永远抽不到</b>：自动组卷只按 1/2/3 筛，
+        // 4/5 的题只有在「不限难度」时才可能出现，而且看不出哪里不对。
+        if (question.getDifficulty() != null && question.getDifficulty() > 3) {
+            throw new BusinessException("题目难度只能是 1 / 2 / 3");
+        }
         // 归属必须落库：题目的可读性完全靠 created_by 过滤，
         // 存成 NULL 的题目从此谁都看不见，等于写进了一个黑洞
         if (question.getCreatedBy() == null) {
@@ -242,9 +273,132 @@ public class ExamService {
         // 答案与选项必须自洽。这一步挡的不是"参数格式"，是"这道题根本没法判对"：
         // 实测过判断题答案写成「正确」、单选题答案是 Z 而选项只有 A–D ——
         // 两种都能一路入库、发布、让学生作答，然后全班 0 分，且全程不报错。
+
         QuestionRule.validate(type, question.getOptions(), question.getAnswer());
-        questionMapper.insert(question);
-        return question.getId();
+        return type;
+    }
+
+
+    // ==================================================================
+    // 回头路：改题 / 删题 / 从草稿试卷里移除
+    // ==================================================================
+    // 在这三个方法之前，这个老师端只有"往前"的动作（建题 → 组卷 → 发布 → 结束）。
+    // 一旦发现题出错了，唯一的路是重建一整场考试 —— 这不是"少个功能"，
+    // 是让前面所有并发与一致性设计都失去意义：一套不能纠错的系统，
+    // 用得越认真，代价越大。
+
+    /**
+     * 改题。
+     *
+     * <p><b>为什么"被已发布考试引用"就整题冻结</b>：答案是判分依据。
+     * 一场已经发布（甚至已经考完判过分）的考试里，把某道题的答案从 B 改成 C，
+     * 那些按 B 判过的卷子就同时存在两种解释：卷面显示的是新答案，
+     * 分数是按旧答案算的。库里没有任何字段记录"这条答卷是按哪一版答案判的"，
+     * 所以这种不一致一旦产生，永远查不出来。
+     *
+     * <p>规则刻意定得比"只冻结答案和选项"更宽 —— 整题冻结。理由是两个：
+     * 分支少一半（不用去比对 options 的规范化形式），说法只有一句
+     * （"已发布的考试里题目不可改"）。代价是连改错别字也被挡住，
+     * 但这比留一个半开的口子好：半开的口子讲不清，也测不全。
+     *
+     * <p>草稿考试里被引用不受影响 —— 那场考试还没人考，改完重新发布即可。
+     */
+    public void updateQuestion(Long questionId, Question patch, Long teacherId) {
+        Question existing = requireOwnQuestion(questionId, teacherId);
+
+        List<ExamQuestion> refs = examQuestionMapper.selectList(
+                new LambdaQueryWrapper<ExamQuestion>().eq(ExamQuestion::getQuestionId, questionId));
+        if (!refs.isEmpty()) {
+            Set<Long> examIds = refs.stream().map(ExamQuestion::getExamId)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<Exam> locked = examMapper.selectBatchIds(examIds).stream()
+                    .filter(e -> !ExamStatus.DRAFT.code().equals(e.getStatus()))
+                    .toList();
+            if (!locked.isEmpty()) {
+                String where = locked.stream()
+                        .map(e -> "「" + e.getTitle() + "」")
+                        .collect(Collectors.joining("、"));
+                throw new BusinessException("这道题在已发布的考试 " + where
+                        + " 里，题目已冻结。已发布的试卷改答案，会让「卷面显示新答案、"
+                        + "分数按旧答案算」的矛盾永久留在数据里。要更正请先结束那场考试并新建。");
+            }
+        }
+
+        existing.setSubject(patch.getSubject());
+        existing.setType(patch.getType());
+        existing.setStem(patch.getStem());
+        existing.setOptions(patch.getOptions());
+        existing.setAnswer(patch.getAnswer());
+        existing.setScore(patch.getScore());
+        existing.setDifficulty(patch.getDifficulty());
+        validateQuestionContent(existing);
+        questionMapper.updateById(existing);
+    }
+
+    /**
+     * 删题。
+     *
+     * <p>被任何试卷引用就拒绝 —— 删掉之后那几份卷子会少一道题，
+     * 而历史答卷里的作答记录仍然指着这个 question_id。学生查成绩时会看到
+     * "一道空白题拿了 5 分"这种东西，比报错难查得多。
+     *
+     * <p>没有做软删除（status 字段）：题库里"不用的题"最常见的原因是录错了，
+     * 而录错的题留着只会让下次组卷再抽到它一次。真要保留历史，正确做法是
+     * 先从试卷里移除（草稿可直接移除，已发布的考试本来就冻结着），
+     * 而不是给题目加一个"删了但还在"的状态 —— 那种状态每个查询都要记得过滤，
+     * 漏一处就会在最不该出现的地方冒出来。
+     */
+    public void deleteQuestion(Long questionId, Long teacherId) {
+        requireOwnQuestion(questionId, teacherId);
+
+        List<ExamQuestion> refs = examQuestionMapper.selectList(
+                new LambdaQueryWrapper<ExamQuestion>().eq(ExamQuestion::getQuestionId, questionId));
+        if (!refs.isEmpty()) {
+            String where = refs.stream().map(r -> "#" + r.getExamId())
+                    .distinct().limit(3).collect(Collectors.joining("、"));
+            throw new BusinessException("这道题还在 " + refs.size() + " 份试卷里（考试 " + where
+                    + "），不能删。删掉会让那些试卷少一道题，历史答卷的作答也会指向"
+                    + "一个不存在的题目。先从草稿试卷里移除它。");
+        }
+        questionMapper.deleteById(questionId);
+    }
+
+    /**
+     * 从草稿试卷里移除一道题。
+     *
+     * <p>为什么只允许草稿：已发布的卷子是学生正在作答的那一份，中途抽掉一道题，
+     * 已经答过它的学生提交时会被判成"答了卷面上没有的题"。草稿没有这个约束 ——
+     * 那正是组卷阶段必须能反复修改的理由。
+     *
+     * <p>移除后不重排 seq：seq 只用于卷面排序，留空号不影响取题顺序
+     * （{@code ORDER BY seq} 照样对）。重排要改动其他行，为了"刚删掉一道题"
+     * 去写一条批量 UPDATE 不划算，而多出来的更新会进 binlog、要进事务。
+     */
+    public void removeQuestion(Long examId, Long questionId, Long teacherId) {
+        Exam exam = examAccess.requireOwned(examId, teacherId);
+        if (!ExamStatus.DRAFT.code().equals(exam.getStatus())) {
+            throw new BusinessException("只有草稿状态的考试才能改卷子");
+        }
+        int deleted = examQuestionMapper.delete(new LambdaQueryWrapper<ExamQuestion>()
+                .eq(ExamQuestion::getExamId, examId)
+                .eq(ExamQuestion::getQuestionId, questionId));
+        if (deleted == 0) {
+            throw new BusinessException("这道题不在本场试卷里: " + questionId);
+        }
+    }
+
+    /** 取一道题并确认是当前老师出的。改和删走同一道闸门，别各写一遍。 */
+    private Question requireOwnQuestion(Long questionId, Long teacherId) {
+        Question q = questionMapper.selectById(questionId);
+        if (q == null) {
+            throw new BusinessException("题目不存在: " + questionId);
+        }
+        // created_by 为 NULL 一律拒绝（fail-closed）：这种题谁都改得了，
+        // 也谁都看不见，属于历史脏数据，正确做法是清理而不是放行
+        if (q.getCreatedBy() == null || !q.getCreatedBy().equals(teacherId)) {
+            throw new BusinessException(403, "只能修改自己出的题目: " + questionId);
+        }
+        return q;
     }
 
     /** 题库里的题型可能是历史脏数据，解析失败要回 400 而不是让 IllegalArgumentException 变成 500 */

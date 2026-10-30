@@ -212,9 +212,14 @@ ws.onmessage = e => console.log(e.data);   // {"remainingSeconds":3540,"ended":f
 | POST | `/api/teacher/users` | 建账号 |
 | POST | `/api/teacher/questions` | 出题 |
 | GET | `/api/teacher/questions` | 题库（只含自己出的题） |
+| PUT | `/api/teacher/questions/{id}` | 改题（整体覆盖；被已发布考试引用则冻结） |
+| DELETE | `/api/teacher/questions/{id}` | 删题（被任何试卷引用则拒绝，并说明在哪几份里） |
+| POST | `/api/teacher/questions/import` | 批量导入（**默认只预演**，`dryRun=false` 才写库） |
 | POST | `/api/teacher/exams` | 建考试（草稿） |
 | GET | `/api/teacher/exams` | 自己的考试列表（含草稿） |
-| POST | `/api/teacher/exams/{id}/questions` | 组卷 |
+| POST | `/api/teacher/exams/{id}/questions` | 组卷（手工选题） |
+| POST | `/api/teacher/exams/{id}/auto-compose` | 按题型/难度配额自动抽题 |
+| DELETE | `/api/teacher/exams/{id}/questions/{questionId}` | 从草稿试卷移除一道题（已发布不可改） |
 | POST | `/api/teacher/exams/{id}/publish` | 发布（总分按卷面自动累加） |
 | POST | `/api/teacher/exams/{id}/close` | 结束 |
 | GET | `/api/teacher/exams/{id}/stats` | 平均分/最高/最低/及格人数 |

@@ -363,4 +363,157 @@ class ExamServiceTest {
         assertEquals(400, e.code());
         verify(examQuestionMapper, never()).insert(any(ExamQuestion.class));
     }
+
+    // ------------------------------------------------------------------
+    // 回头路：改题 / 删题 / 从草稿试卷移除
+    //
+    // 这三个动作的共同点是"会让已有数据失去参照"：改答案会让旧卷子的分数
+    // 解释不了，删题会让历史答卷指向空，从已发布的卷子里抽题会让正在作答的人
+    // 交上来一道卷面上没有的题。所以下面测的主要是**什么时候必须拒绝**。
+    // ------------------------------------------------------------------
+
+    @Test
+    void 改题时被已发布考试引用就拒绝() {
+        Question own = questionOwnedBy(TEACHER, 9L);
+        when(questionMapper.selectById(9L)).thenReturn(own);
+        when(examQuestionMapper.selectList(any())).thenReturn(List.of(refTo(EXAM_ID, 9L)));
+        Exam published = examOwnedBy(TEACHER, ExamStatus.PUBLISHED);
+        published.setId(EXAM_ID);
+        published.setTitle("期中测验");
+        when(examMapper.selectBatchIds(any())).thenReturn(List.of(published));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.updateQuestion(9L, questionOf("single", 10, 1), TEACHER));
+
+        assertEquals(400, e.code());
+        // 错误信息要指出是哪一场考试，否则老师无从下手
+        assertEquals(true, e.getMessage().contains("期中测验"), e.getMessage());
+        assertEquals(true, e.getMessage().contains("冻结"), e.getMessage());
+        verify(questionMapper, never()).updateById(any(Question.class));
+    }
+
+    @Test
+    void 草稿考试里的题可以改() {
+        // 草稿是老师的工作区，不该被锁住 —— 否则"先组卷再微调"这个最常见的
+        // 组卷方式就直接做不到了
+        Question own = questionOwnedBy(TEACHER, 9L);
+        when(questionMapper.selectById(9L)).thenReturn(own);
+        when(examQuestionMapper.selectList(any())).thenReturn(List.of(refTo(EXAM_ID, 9L)));
+        Exam draft = examOwnedBy(TEACHER, ExamStatus.DRAFT);
+        draft.setId(EXAM_ID);
+        when(examMapper.selectBatchIds(any())).thenReturn(List.of(draft));
+
+        Question patch = questionOf("single", 10, 1);
+        patch.setStem("改过的题干");
+        examService.updateQuestion(9L, patch, TEACHER);
+
+        ArgumentCaptor<Question> captor = ArgumentCaptor.forClass(Question.class);
+        verify(questionMapper).updateById(captor.capture());
+        assertEquals("改过的题干", captor.getValue().getStem());
+        assertEquals(9L, captor.getValue().getId(), "改的是原行，不是新插一行");
+    }
+
+    @Test
+    void 改题时答案不自洽照样被挡住() {
+        // 建题那条路有校验，改题这条路必须有同一份，否则"建不进去的坏题"能从改进去
+        Question own = questionOwnedBy(TEACHER, 9L);
+        when(questionMapper.selectById(9L)).thenReturn(own);
+        when(examQuestionMapper.selectList(any())).thenReturn(List.of());
+
+        Question bad = questionOf("single", 10, 1);
+        bad.setAnswer("Z");
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.updateQuestion(9L, bad, TEACHER));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).updateById(any(Question.class));
+    }
+
+    @Test
+    void 改别人的题403() {
+        Question other = questionOwnedBy(OTHER_TEACHER, 9L);
+        when(questionMapper.selectById(9L)).thenReturn(other);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.updateQuestion(9L, questionOf("single", 10, 1), TEACHER));
+
+        assertEquals(403, e.code());
+    }
+
+    @Test
+    void 题不存在时报400而不是静默成功() {
+        when(questionMapper.selectById(404L)).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.deleteQuestion(404L, TEACHER));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).deleteById(any(java.io.Serializable.class));
+    }
+
+    @Test
+    void 被试卷引用的题不能删() {
+        Question own = questionOwnedBy(TEACHER, 9L);
+        when(questionMapper.selectById(9L)).thenReturn(own);
+        when(examQuestionMapper.selectList(any())).thenReturn(List.of(refTo(1L, 9L), refTo(2L, 9L)));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.deleteQuestion(9L, TEACHER));
+
+        assertEquals(400, e.code());
+        assertEquals(true, e.getMessage().contains("2 份试卷"), e.getMessage());
+        verify(questionMapper, never()).deleteById(any(java.io.Serializable.class));
+    }
+
+    @Test
+    void 没被引用的题可以删() {
+        when(questionMapper.selectById(9L)).thenReturn(questionOwnedBy(TEACHER, 9L));
+        when(examQuestionMapper.selectList(any())).thenReturn(List.of());
+
+        examService.deleteQuestion(9L, TEACHER);
+
+        verify(questionMapper).deleteById(9L);
+    }
+
+    @Test
+    void 已发布的试卷不能移除题目() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.PUBLISHED));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.removeQuestion(EXAM_ID, 9L, TEACHER));
+
+        assertEquals(400, e.code());
+        verify(examQuestionMapper, never()).delete(any());
+    }
+
+    @Test
+    void 移除不在卷子里的题报400() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(examQuestionMapper.delete(any())).thenReturn(0);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.removeQuestion(EXAM_ID, 9L, TEACHER));
+
+        assertEquals(400, e.code());
+        assertEquals(true, e.getMessage().contains("不在本场试卷里"), e.getMessage());
+    }
+
+    @Test
+    void 草稿试卷可以移除题目() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(examQuestionMapper.delete(any())).thenReturn(1);
+
+        examService.removeQuestion(EXAM_ID, 9L, TEACHER);
+
+        verify(examQuestionMapper).delete(any());
+    }
+
+    /** 造一条"某道题在某份卷子里"的关联 */
+    private static ExamQuestion refTo(Long examId, Long questionId) {
+        ExamQuestion ref = new ExamQuestion();
+        ref.setExamId(examId);
+        ref.setQuestionId(questionId);
+        return ref;
+    }
 }

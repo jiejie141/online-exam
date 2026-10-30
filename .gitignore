@@ -39,3 +39,12 @@ target/e2e-check.log
 src/main/resources/static/
 web/node_modules/
 web/dist/
+
+### 外部题库的转换产物 ###
+# 从 C-Eval / MMLU 之类数据集转出来的 JSONL 属于**第三方数据**，
+# 不是代码。提交进公开仓库等于重新分发，会额外触发 CC BY-NC-SA 的
+# 「相同方式共享」义务 —— 而这条义务很难在事后撤销。
+# 命名约定：转换脚本的输出统一叫 *.import.jsonl，这样放在仓库目录里
+# 也不会被 `git add -A` 顺手带走。
+# （docs/question-bank/sample*.jsonl 是自建的示例，没有这个约束，可以入库。）
+*.import.jsonl
