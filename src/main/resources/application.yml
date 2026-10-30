@@ -2,36 +2,14 @@ spring:
   application:
     name: online-exam
 
-  datasource:
-    url: "jdbc:mysql://127.0.0.1:3306/online_exam?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
-    username: root
-    password: root
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      connection-timeout: 3000
-
-  data:
-    redis:
-      host: 127.0.0.1
-      port: 6379
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 2
-
-  rabbitmq:
-    host: 127.0.0.1
-    port: 5672
-    username: guest
-    password: guest
-    listener:
-      simple:
-        concurrency: 2
-        max-concurrency: 4
-        prefetch: 20
+  # 默认跑 dev。生产用 SPRING_PROFILES_ACTIVE=prod 覆盖。
+  #
+  # 为什么要有默认值：没有它时，忘记设环境变量的部署会以「没有任何 profile」的状态启动，
+  # 于是 application-dev.yml / application-prod.yml 都不生效，配置全落在下面这份公共文件里 ——
+  # 那种「看起来启动了、其实跑的是另一套配置」最难排查。
+  # 给个默认 dev 至少让本地和 CI 的行为是确定的、写下来的。
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
 
   # 版本化迁移。
   #
@@ -72,10 +50,10 @@ exam:
   jwt:
     # 必须由环境变量 EXAM_JWT_SECRET 注入，**故意不给默认值**。
     #
-    # 原来这里写着一个能直接用的默认密钥（"online-exam-dev-secret-..."），
+    # 原来这里写着一个能直接用的默认密钥（online-exam-dev-secret-...），
     # 那等于把签名密钥连同代码一起提交进了版本库：任何读过这个仓库的人
     # 都能自己签一个 role=teacher 的令牌，直接改成绩。
-    # 原来的注释写着"生产要改"，但没有任何东西**强制**改 —— 那就迟早不会改。
+    # 原来的注释写着「生产要改」，但没有任何东西**强制**改 —— 那就迟早不会改。
     # 现在留空 + JwtUtil 启动即校验，不设就起不来（fail-closed）。
     secret: "${EXAM_JWT_SECRET:}"
     ttl-minutes: ${EXAM_JWT_TTL_MINUTES:120}
@@ -83,7 +61,7 @@ exam:
     # true = 交卷后丢 MQ 异步判分；false = 同步判分（本地没起 RabbitMQ 时用这个）
     async: true
     # 漏判扫描间隔。判分失败被消费者吞掉（不吞会被 Broker 无限重投），
-    # 所以需要一个任务定期把"交过卷但没分"的数量做成指标，否则失败是静默的。
+    # 所以需要一个任务定期把「交过卷但没分」的数量做成指标，否则失败是静默的。
     # 30 秒是权衡：够快能及时发现，又不至于频繁打库（走 idx_record_deadline 前缀 status）。
     sweep-delay-ms: ${EXAM_GRADING_SWEEP_DELAY_MS:30000}
   cache:

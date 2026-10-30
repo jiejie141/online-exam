@@ -1,0 +1,47 @@
+# 本地开发：全部依赖跑在 127.0.0.1，账号就是 docker-compose.yml 里那套。
+#
+# 这份文件是**唯一**允许出现明文弱口令的地方 —— 因为它描述的就是「本机起的那个容器」，
+# 密码写在这里不构成泄露（root/root 本来就是 compose 里的值）。
+# 生产用 application-prod.yml，那边的每个凭据都只能来自环境变量。
+spring:
+  datasource:
+    url: "${EXAM_DB_URL:jdbc:mysql://127.0.0.1:3306/online_exam?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}"
+    username: ${EXAM_DB_USERNAME:root}
+    password: ${EXAM_DB_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 3000
+
+  data:
+    redis:
+      host: ${EXAM_REDIS_HOST:127.0.0.1}
+      port: ${EXAM_REDIS_PORT:6379}
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+
+  rabbitmq:
+    host: ${EXAM_RABBITMQ_HOST:127.0.0.1}
+    port: ${EXAM_RABBITMQ_PORT:5672}
+    username: ${EXAM_RABBITMQ_USERNAME:guest}
+    password: ${EXAM_RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        concurrency: 2
+        max-concurrency: 4
+        prefetch: 20
+
+exam:
+  jwt:
+    # 本地必须自己设一个。不设就起不来 —— 这是故意的，
+    # 见 application.yml 里那段注释：有默认值就等于密钥进了版本库。
+    # 跑 scripts/e2e.sh 时它会自动注入一个随机值。
+    secret: "${EXAM_JWT_SECRET:}"
+
+logging:
+  level:
+    com.jiejie.exam: debug

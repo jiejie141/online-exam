@@ -1,0 +1,52 @@
+# 生产：**所有**凭据只能来自环境变量，且不接受弱口令。
+#
+# 这里刻意不写任何默认值（连 :root 这种都没有）。少一个环境变量，
+# 启动直接失败并指出缺的是哪个 —— 比「用默认值连上了某个恰好同名同密码的库」安全得多。
+# 弱口令的检查在 ProdConfigGuard（@Profile("prod")）里，启动即校验。
+spring:
+  datasource:
+    url: "${EXAM_DB_URL}"
+    username: ${EXAM_DB_USERNAME}
+    password: ${EXAM_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 生产连接池给一个能撑住考试高峰的值。
+      # 单场几千人同时交卷时，真正限制吞吐的是 MySQL 和判分队列，不是这个数。
+      maximum-pool-size: ${EXAM_DB_POOL_MAX:50}
+      minimum-idle: ${EXAM_DB_POOL_MIN:10}
+      connection-timeout: 3000
+      # 数据库连接被中间设备悄悄掐断时，不设这个会让池里留下死连接
+      max-lifetime: 1200000
+
+  data:
+    redis:
+      host: ${EXAM_REDIS_HOST}
+      port: ${EXAM_REDIS_PORT:6379}
+      password: ${EXAM_REDIS_PASSWORD}
+      lettuce:
+        pool:
+          max-active: ${EXAM_REDIS_POOL_MAX:32}
+          max-idle: 16
+          min-idle: 4
+
+  rabbitmq:
+    host: ${EXAM_RABBITMQ_HOST}
+    port: ${EXAM_RABBITMQ_PORT:5672}
+    username: ${EXAM_RABBITMQ_USERNAME}
+    password: ${EXAM_RABBITMQ_PASSWORD}
+    listener:
+      simple:
+        concurrency: ${EXAM_GRADING_CONCURRENCY:4}
+        max-concurrency: ${EXAM_GRADING_MAX_CONCURRENCY:8}
+        prefetch: 20
+
+exam:
+  jwt:
+    # 生产同样不给默认值，且 ProdConfigGuard 会额外校验它的强度
+    secret: "${EXAM_JWT_SECRET}"
+    ttl-minutes: ${EXAM_JWT_TTL_MINUTES:120}
+
+logging:
+  level:
+    root: info
+    com.jiejie.exam: info
