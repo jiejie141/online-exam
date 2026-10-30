@@ -300,6 +300,54 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 卷子成了改了一半的半成品，而调用方只看到一个 403 —— 这个坑有专门的用例钉着
 （`列表里夹着别人的题目就一道都不写`）。
 
+### 9. 四个工程设施：分页 / 多环境 / traceId / 优雅停机与任务锁
+
+这四条都不是业务功能，但少了它们，这个项目只在我自己机器上成立。
+
+**（1）列表分页。** 老师端的考试列表和题库列表原来是一次全量 `selectList`。
+题库几百道题时不明显，上千道时每次打开页面都要把整表拉回来、再全量序列化一遍。
+现在返回 `{items,total,page,size}`，由 MyBatis-Plus 的 `PaginationInnerInterceptor` 拼 `LIMIT`。
+两个细节：`page` 从 **1** 开始，传 0 或负数夹到 1 而不是 400（翻页不该成为错误来源）；
+`size` 上限 100，并且**在 controller 里显式夹一遍**，不依赖插件静默改写 ——
+否则返回的 `size` 字段会和请求对不上，前端算页数就错。
+配套加了 `V3__exam_teacher_list_index.sql`：`(created_by, start_at)`。
+等值列放最左、排序列放右，避免 filesort；**没有加 DESC 索引** —— B+ 树反向扫描代价一样，
+单独再建一个索引只会多一份写入开销。
+
+学生端的 `/api/exams/available` **刻意不分页**：它被时间窗（已发布 + 已开考 + 未结束）
+天然限制在很小的结果集里，加分页只会让前端多一层无意义的翻页。
+
+**（2）多环境配置。** 原来只有一份 `application.yml`，数据库口令是 `root/root` 写在文件里，
+生产要改只能手改再提交 —— 而「改完忘了改回来」是这类配置最常见的坏结局。
+现在拆成 `application.yml`（公共）+ `application-dev.yml` + `application-prod.yml`，
+`spring.profiles.active` 默认 `dev`，所有凭据在 prod 里都写成 `${EXAM_DB_PASSWORD}` 形式**不给默认值**。
+
+光拆文件还不够 —— **不给默认值只会在连库那一刻才炸**，而那时应用已经起了一半。
+所以加了 `config/ProdConfigGuard.java`：`@Profile("prod")` + `@PostConstruct`，
+启动时一次性检查三个口令（非空、不在示例口令集、≥8 字符）和 JWT 密钥（≥32 字节、字符种类 ≥8），
+**把问题一次全列出来再拒绝启动**。10 条单测钉住，包括「32 个 a 也能过长度检查，但那不叫密钥」。
+
+**（3）traceId 贯穿日志。** 没有它的时候，一个请求打出的几行日志和其他请求的日志混在一起，
+排查只能靠时间戳对齐 —— 并发一高就彻底不可读。
+`web/TraceIdFilter.java` 是 `Ordered.HIGHEST_PRECEDENCE` 的 `OncePerRequestFilter`：
+读 `X-Request-Id`，没有就生成 16 位，放进 MDC，同时写回响应头；`finally` 里 `MDC.remove`
+（**线程池复用线程，不清就会串号** —— 这条有专门的用例）。
+传进来的 id 只接受字母数字和 `-_.` 且不超过 64 字符，否则重新生成：
+日志里的值是外部可控的，不校验就等于允许往日志里注入换行。
+`logback-spring.xml` 的 pattern 里带 `%X{traceId:-}`，**刻意不用 `%clr()`** ——
+ANSI 颜色码会让 `grep` 把日志文件判成二进制、只回一句 `Binary file matches` 而不给行号。
+
+**（4）优雅停机 + 定时任务锁。** `server.shutdown: graceful` + `timeout-per-shutdown-phase: 30s`：
+停机时先不再接新请求，等在途的请求做完再退。没有它，一次滚动发布就会把正在交卷的人打断。
+
+定时任务（`AutoSubmitJob` / `ExamCloseJob` / `GradingSweepJob`）在多实例下会被每个实例各跑一遍。
+`job/JobLock.java` 用 Redis `setIfAbsent` 抢锁、Lua 脚本校验 token 后释放（和 `PaperCache` 同一套写法）。
+**关键取舍：Redis 不可用时降级成无锁执行，而不是跳过这一轮。**
+锁在这里是「避免重复劳动」的优化，不是正确性前提 —— 三个任务本身都是幂等的
+（自动收卷只改状态未变的记录、关考只关已到点的、扫描只是读）。
+反过来如果 Redis 一挂就停止收卷，那才是真的把可用性绑在了缓存上。
+这条分支有变异验证：把 `return task.get()` 改成 `return null`，`JobLockTest` 立刻红。
+
 ## 六、实测数字
 
 全部来自 `scripts/e2e.sh` 和 `scripts/bench.sh` 的真实运行输出，不是估算。
@@ -366,7 +414,7 @@ deadline = min(开始时间 + 时长, 考试 end_at)
 mvn test
 ```
 
-153 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
+178 条，全部为单元测试 / Mockito 打桩测试 / 反射静态检查，不依赖任何外部中间件：
 
 | 测试类 | 条数 | 覆盖 |
 |---|---|---|
@@ -388,6 +436,9 @@ mvn test
 | `ExamServiceTest` | 11 | 别人不能往他人卷子里加题/发布/结束（且一行都没写进去）、不能把别人的题目加进自己卷子（列表里夹一道就一道都不写）、总分按卷面累加、及格线高于总分拒绝发布、空卷拒绝发布、题目必须有出题老师 |
 | `PaperAccessTest` | 6 | 没进过这场考试取不到卷面（且此时既不查库也不查缓存）、进过之后可以取、别人的答卷不因 examId 相同对我开放、考试不存在与没进过给同一个回答、进场自己取卷不受影响、交卷后仍能取原题渲染成绩单 |
 | `StatsServiceTest` | 6 | 四个统计接口都过归属校验、没人判分时补 0 而不是空指针（avg/max/min 保持 null）、交卷进度把 graded 也算作已交 |
+| `JobLockTest` | 7 | 抢到锁才执行、抢不到返回 null 不执行、**Redis 挂了照样执行（降级无锁）**、执行完释放、抛异常也释放、释放要校验 token（不删别人的锁）、TTL 会过期 |
+| `TraceIdFilterTest` | 8 | 无请求头时生成 16 位、有请求头时透传、超长/带非法字符的请求头被丢弃重生成、响应头一定回写、MDC 在 finally 里清掉（线程复用不串号） |
+| `ProdConfigGuardTest` | 10 | 生产配置体检：示例口令（root/password/guest，大小写不敏感）、空口令、过短口令、JWT 密钥过短、JWT 密钥字符种类不足全部拒绝启动，且**多个问题一次性全列出来** |
 
 ### 前端单测
 
@@ -459,7 +510,7 @@ cd web && npm test      # vitest run，40 条
     倒计时用字段构造而不是 `new Date(s)`（差 8 小时那个坑）、多选答案先排序再拼
     （`DAC` 与 `ACD` 必须是同一个答案）、401 之后清 store 并带 `redirect` 回跳、
     答题卡 / 交卷弹窗 / 加载失败三态。**没有 Playwright**，所以「后端改坏了但
-    前端单测仍然绿」这种情况抓不到 —— 接口契约靠后端 153 条单测与 e2e 脚本兜。
+    前端单测仍然绿」这种情况抓不到 —— 接口契约靠后端 178 条单测与 e2e 脚本兜。
 11. **Element Plus 是深路径按需引入，不是官方 resolver。** 一开始按文档配
     `unplugin-vue-components` 的 `ElementPlusResolver`，产物一点没瘦：它在
     element-plus 2.x 上解析到的是 `element-plus/es` 这个 barrel，而 barrel 里的
@@ -479,10 +530,13 @@ cd web && npm test      # vitest run，40 条
 src/main/java/com/jiejie/exam/
 ├── OnlineExamApplication.java
 ├── cache/PaperCache.java              试卷缓存（三问题 + 降级）
-├── config/ClockConfig.java            把"现在几点"做成 Bean，方便测试固定时间
+├── config/
+│   ├── ClockConfig.java               把"现在几点"做成 Bean，方便测试固定时间
+│   ├── MybatisPlusConfig.java         分页插件（上限 100 条，不静默改写）
+│   └── ProdConfigGuard.java           prod 启动体检：弱口令 / 弱密钥直接拒绝启动
 ├── domain/
 │   ├── entity/                        6 张表的实体
-│   ├── dto/                           PaperItem(不含答案) / 统计类 DTO
+│   ├── dto/                           PaperItem(不含答案) / PageResult / 统计类 DTO
 │   └── mapper/                        6 个 Mapper，含统计 SQL
 ├── exam/
 │   ├── QuestionType.java / ExamStatus.java / RecordStatus.java
@@ -492,15 +546,29 @@ src/main/java/com/jiejie/exam/
 │   ├── GradingRule.java               判分规则（纯函数）
 │   ├── GradingService.java            取数循环写回
 │   ├── GradingMq.java / Producer / Consumer
-├── job/AutoSubmitJob.java / ExamCloseJob.java
+├── job/
+│   ├── AutoSubmitJob.java             超时自动收卷（30s 一轮）
+│   ├── ExamCloseJob.java              到点关考
+│   ├── GradingSweepJob.java           漏判扫描，写指标
+│   └── JobLock.java                   Redis 抢锁；**抢不到跳过、Redis 挂了照跑**
 ├── security/                          JWT + Spring Security + 登录
 ├── stats/StatsService.java
-├── web/                               Controller + 统一响应 + 全局异常处理
+├── web/
+│   ├── Controller 若干                学生端 / 老师端 / 登录
+│   ├── ApiResponse / BusinessException 统一响应与业务异常
+│   ├── GlobalExceptionHandler.java    异常到 HTTP 的翻译（业务 code 决定状态码）
+│   └── TraceIdFilter.java             X-Request-Id → MDC，贯穿整条日志
 └── ws/                                WebSocket 倒计时
 
-src/main/resources/db/
-├── schema.sql                         建表（每个索引都注明服务哪条查询）
-└── seed.sql                           演示数据（重复执行会先清空业务表，保证结果一致）
+src/main/resources/
+├── application.yml                    公共配置；profile 默认 dev
+├── application-dev.yml                本地依赖 127.0.0.1，凭据带默认值
+├── application-prod.yml               **凭据不给默认值**，配错就起不来
+├── logback-spring.xml                 日志 pattern 带 traceId（不用 ANSI 颜色）
+└── db/
+    ├── schema.sql                     建表（每个索引都注明服务哪条查询）
+    ├── seed.sql                       演示数据（重复执行会先清空业务表，保证结果一致）
+    └── migration/                     Flyway V1 基线 / V2 补列 / V3 老师端列表索引
 
 scripts/
 ├── e2e.sh                             一条命令跑完端到端
