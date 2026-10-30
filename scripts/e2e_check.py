@@ -287,6 +287,48 @@ def main():
     check("新老师关不掉别人的考试（403）", body.get("code") == 403,
           f"code={body.get('code')}")
 
+    print("\n[10.5] 参数校验：传错了要回 4xx，不能回 500")
+    # 这三条都是实测出来的：以前它们全都能"成功"入库，然后在下游炸掉。
+    #
+    # 为什么必须在 e2e 里钉而不是只写单测：单测走的是 service 方法，
+    # 而这里验的是**整条链路**——@Valid 有没有生效、GlobalExceptionHandler
+    # 有没有把 IllegalArgumentException 翻译成 4xx、数据库有没有真的被写脏。
+    # 少任何一环，单测全绿但接口仍然能把脏数据放进来。
+    st, body = api.call("POST", "/api/teacher/questions", token=tt, body={
+        "subject": "Java", "type": "fill-blank", "stem": "填空题题型不存在",
+        "answer": "x", "score": 5})
+    # 以前这里是 500「服务内部错误」：QuestionType.of 抛 IllegalArgumentException，
+    # 没人接就掉进兜底。可这是调用方传错了参数，重试一万次也不会成功。
+    check("非法题型返回 400 而不是 500",
+          st == 400 and body.get("code") == 400, f"http={st} body={body}")
+
+    st, body = api.call("POST", "/api/teacher/questions", token=tt, body={
+        "subject": "Java", "type": "single", "stem": "负分值的题",
+        "answer": "A", "score": -10})
+    # 负分值的题能建出来，但它永远判不了分：GradingRule 第一行就抛
+    # "fullScore must not be negative"，消费端记一条 error 后放弃，
+    # 答卷永远停在「还没判完」。这条必须在入口挡住。
+    check("负分值的题返回 400", st == 400 and body.get("code") == 400,
+          f"http={st} body={body}")
+
+    st, body = api.call("POST", "/api/teacher/users", token=tt, body={
+        "username": "emptypw", "password": "", "realName": "空口令", "role": "student"})
+    # CreateUserRequest 上四个 @NotBlank 写着，但 Controller 形参上没有 @Valid ——
+    # 校验注解一条都不执行，实测能建出空口令账号、还能用空口令登录成功。
+    check("空口令建账号返回 400", st == 400 and body.get("code") == 400,
+          f"http={st} body={body}")
+    st, body = api.call("POST", "/api/auth/login",
+                        body={"username": "emptypw", "password": ""})
+    # 上一条如果没挡住，这里就会真的登进去 —— 断言它一定登不进去。
+    check("空口令账号登不进去", body.get("code") != 0, f"code={body.get('code')}")
+
+    st, body = api.call("POST", "/api/teacher/users", token=tt, body={
+        "username": "   ", "password": "pw123456", "realName": "空格名", "role": "student"})
+    # @NotBlank 和 @NotEmpty 的区别就在这里：空格串不是空串，
+    # 用 @NotEmpty 会一路放行，库里留下一个肉眼看不见的用户名。
+    check("纯空格用户名返回 400", st == 400 and body.get("code") == 400,
+          f"http={st} body={body}")
+
     # ---------------- 延迟实测 ----------------
     print(f"\n[11] 判分延迟实测（另造 {args.students} 名学生各交一份卷）")
     latencies = []

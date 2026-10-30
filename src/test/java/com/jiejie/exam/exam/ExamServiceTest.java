@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -236,5 +237,132 @@ class ExamServiceTest {
         });
 
         assertEquals(7L, examService.createQuestion(q));
+    }
+
+    // ------------------------------------------------------------------
+    // 参数校验：这几条都是「传错了参数」，必须回 400，不能回 500，
+    // 更不能把一条永远判不了分的题放进题库。
+    // ------------------------------------------------------------------
+
+    private static Question questionOf(String type, Integer score, Integer difficulty) {
+        Question q = new Question();
+        q.setSubject("Java");
+        q.setType(type);
+        q.setStem("下列哪个是接口？");
+        q.setAnswer("A");
+        q.setScore(score);
+        q.setDifficulty(difficulty);
+        q.setCreatedBy(TEACHER);
+        return q;
+    }
+
+    @Test
+    void 非法题型回400而不是500() {
+        // QuestionType.of 抛的是 IllegalArgumentException，没人接的话会掉进
+        // GlobalExceptionHandler 的 Exception 兜底变成 500「服务内部错误」。
+        // 可这是调用方传错了参数，重试一万次也不会成功 —— 必须 4xx。
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createQuestion(questionOf("fill-blank", 10, 1)));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).insert(any(Question.class));
+    }
+
+    @Test
+    void 分值为负数的题目拒绝入库() {
+        // 负分值的题能建出来，但它永远判不了分：GradingRule 第一行就抛
+        // "fullScore must not be negative"，消费端记一条 error 后放弃，
+        // 答卷永远停在「还没判完」。必须在入口挡住。
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createQuestion(questionOf("single", -10, 1)));
+
+        assertEquals(400, e.code());
+        assertEquals("题目分值必须大于 0", e.getMessage());
+        verify(questionMapper, never()).insert(any(Question.class));
+    }
+
+    @Test
+    void 分值为0的题目也拒绝入库() {
+        // 0 分题判出来是 0 分，不算错，但它在卷面上等于白占一道题的位置，
+        // 而且 publish 累加总分时会让老师误以为卷面总分不对。同样拒绝。
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createQuestion(questionOf("single", 0, 1)));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).insert(any(Question.class));
+    }
+
+    @Test
+    void 分值没填的题目拒绝入库() {
+        // 不填分值时 Controller 会补默认 5 分，所以这里为 null 只可能是
+        // 别的调用方（或将来改坏了）。宁可报错，也别存一条 score 为 NULL 的题。
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createQuestion(questionOf("single", null, 1)));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).insert(any(Question.class));
+    }
+
+    @Test
+    void 难度为负数的题目拒绝入库() {
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createQuestion(questionOf("single", 10, -3)));
+
+        assertEquals(400, e.code());
+        verify(questionMapper, never()).insert(any(Question.class));
+    }
+
+    @Test
+    void 正常题目照样能建() {
+        // 反向断言：上面五条挡的是坏输入，不能顺手把好输入也挡了。
+        Question q = questionOf("single", 10, 2);
+        when(questionMapper.insert(any(Question.class))).thenAnswer(inv -> {
+            inv.getArgument(0, Question.class).setId(11L);
+            return 1;
+        });
+
+        assertEquals(11L, examService.createQuestion(q));
+    }
+
+    @Test
+    void 及格线为负数时拒绝建考试() {
+        // publish 只判「及格线高于卷面总分」，负及格线永远小于总分，
+        // 反而一路畅通 —— 建出来的考试等于全员及格。
+        LocalDateTime start = LocalDateTime.of(2026, 11, 1, 9, 0);
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.createExam("月考", "Java", start, start.plusHours(2), 90, -100, TEACHER));
+
+        assertEquals(400, e.code());
+        assertEquals("及格线不能是负数", e.getMessage());
+        verify(examMapper, never()).insert(any(Exam.class));
+    }
+
+    @Test
+    void 组卷时把分值覆盖成负数也要拒绝() {
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.addQuestions(EXAM_ID, List.of(1L), -7, TEACHER));
+
+        assertEquals(400, e.code());
+        assertEquals("卷面分值必须大于 0", e.getMessage());
+        // 一行都不能写进去
+        verify(examQuestionMapper, never()).insert(any(ExamQuestion.class));
+    }
+
+    @Test
+    void 题库里分值就是负数的脏题不能进卷子() {
+        // 这是历史脏数据路径：不传 score 时沿用题库里的分值，
+        // 而题库里可能已经有 score=-10 的题（修复之前建出来的）。
+        Question dirty = questionOwnedBy(TEACHER, 5L);
+        dirty.setScore(-10);
+        when(examMapper.selectById(EXAM_ID)).thenReturn(examOwnedBy(TEACHER, ExamStatus.DRAFT));
+        when(questionMapper.selectById(5L)).thenReturn(dirty);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> examService.addQuestions(EXAM_ID, List.of(5L), null, TEACHER));
+
+        assertEquals(400, e.code());
+        verify(examQuestionMapper, never()).insert(any(ExamQuestion.class));
     }
 }

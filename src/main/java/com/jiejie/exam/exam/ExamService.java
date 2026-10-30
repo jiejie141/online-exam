@@ -55,6 +55,11 @@ public class ExamService {
         if (durationMinutes <= 0) {
             throw new BusinessException("考试时长必须大于 0");
         }
+        // 及格线不能是负数。发布时只判「及格线高于卷面总分」，
+        // 负及格线永远小于总分，反而一路畅通 —— 建出来的考试等于全员及格。
+        if (passScore < 0) {
+            throw new BusinessException("及格线不能是负数");
+        }
         Exam exam = new Exam();
         exam.setTitle(title);
         exam.setSubject(subject);
@@ -80,6 +85,12 @@ public class ExamService {
         if (!ExamStatus.DRAFT.code().equals(exam.getStatus())) {
             throw new BusinessException("只有草稿状态的考试才能改卷子");
         }
+        // 组卷时给的分值同样必须为正。这里不判的话，老师可以把 100 分的题
+        // 用 score=-7 覆盖成负分，后面 publish 的总分也跟着算成负数，
+        // 而学生交卷时 GradingRule 直接抛异常 —— 整场考试永远判不出来。
+        if (score != null && score <= 0) {
+            throw new BusinessException("卷面分值必须大于 0");
+        }
         // 先全部校验、再全部写入。这个方法没有 @Transactional，
         // 边校验边写的话，列表中间那道"别人的题"会把前几道已经写进库的题留下来，
         // 卷子变成改了一半的半成品，而调用方只看到一个 403。
@@ -94,6 +105,12 @@ public class ExamService {
             // 同样 fail-closed：created_by 为空的题目不让进卷子。
             if (!teacherId.equals(q.getCreatedBy())) {
                 throw new BusinessException(403, "不能把别人的题目加进自己的卷子: " + questionId);
+            }
+            // 不指定分值就沿用题库里的分值；题库里的分值也可能是历史脏数据，
+            // 所以取出来的实际值仍要判一次正数。
+            int effective = score != null ? score : (q.getScore() == null ? 0 : q.getScore());
+            if (effective <= 0) {
+                throw new BusinessException("题目 " + questionId + " 的分值不合法: " + effective);
             }
             questions.add(q);
         }
@@ -192,8 +209,26 @@ public class ExamService {
     }
 
     public Long createQuestion(Question question) {
-        // 答案必须先校验，否则题目进了库才发现判不了分
-        QuestionType.of(question.getType());
+        // 答案必须先校验，否则题目进了库才发现判不了分。
+        //
+        // QuestionType.of 抛的是 IllegalArgumentException，直接漏到
+        // GlobalExceptionHandler 的兜底分支会变成 500「服务内部错误」。
+        // 可这明明是调用方传错了 type，重试一万次也不会成功 ——
+        // 转成业务异常，让 4xx 归 4xx。
+        try {
+            QuestionType.of(question.getType());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("题型只能是 single / multiple / judge: " + question.getType());
+        }
+        // 分值必须是正数。负数分值的题能建出来，但它永远判不了分：
+        // GradingRule 第一行就抛 "fullScore must not be negative"，
+        // 消费端只能记一条 error 然后放弃，答卷永远停在「还没判完」。
+        if (question.getScore() == null || question.getScore() <= 0) {
+            throw new BusinessException("题目分值必须大于 0");
+        }
+        if (question.getDifficulty() != null && question.getDifficulty() < 1) {
+            throw new BusinessException("题目难度必须大于等于 1");
+        }
         // 归属必须落库：题目的可读性完全靠 created_by 过滤，
         // 存成 NULL 的题目从此谁都看不见，等于写进了一个黑洞
         if (question.getCreatedBy() == null) {

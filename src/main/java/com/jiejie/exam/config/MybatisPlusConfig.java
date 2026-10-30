@@ -27,7 +27,7 @@ public class MybatisPlusConfig {
         PaginationInnerInterceptor pagination = new PaginationInnerInterceptor(DbType.MYSQL);
         // 单页上限。没有上限的分页等于对外开了一个「一次拉全表」的开关：
         // 前端传 size=100000，数据库和 JVM 就一起疼。
-        // 服务层还会再夹一次（见 ExamService.normalizeSize），这里是最后一道。
+        // 服务层还会再夹一次（见 TeacherController.clampSize），这里是最后一道。
         pagination.setMaxLimit(100L);
         // 页码超出总页数时返回空列表，而不是悄悄回到第一页。
         // 回到第一页会让「翻到第 5 页」看起来成功了，实际显示的是第 1 页的数据 ——

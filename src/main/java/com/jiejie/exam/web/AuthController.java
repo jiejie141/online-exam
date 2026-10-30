@@ -2,6 +2,7 @@ package com.jiejie.exam.web;
 
 import com.jiejie.exam.security.AuthService;
 import com.jiejie.exam.security.Principal;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,9 +37,16 @@ public class AuthController {
         return ApiResponse.ok(new LoginResponse(result.token(), p.userId(), p.role(), p.realName()));
     }
 
-    /** 建账号。路径在 /api/teacher/ 下，由 Spring Security 的 ROLE_teacher 拦住 */
+    /**
+     * 建账号。路径在 /api/teacher/ 下，由 Spring Security 的 ROLE_teacher 拦住；
+     * 方法内再判一次 me.isTeacher()，是给「路径规则哪天被改宽」留的兜底。
+     *
+     * <p><b>@Valid 不能省。</b>少了它，CreateUserRequest 上的 @NotBlank
+     * 一个都不会执行 —— 实测空口令账号能建出来、还能用空口令登录，
+     * 纯空格的用户名也能入库。校验注解不配 @Valid 就是一段死代码。
+     */
     @PostMapping("/teacher/users")
-    public ApiResponse<Long> createUser(@RequestBody CreateUserRequest request,
+    public ApiResponse<Long> createUser(@Valid @RequestBody CreateUserRequest request,
                                         @AuthenticationPrincipal Principal me) {
         if (me == null || !me.isTeacher()) {
             throw new BusinessException(403, "只有老师可以建账号");
