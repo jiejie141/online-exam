@@ -35,8 +35,17 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+  # 优雅停机：收到 SIGTERM 后先摘掉流量、等在途请求做完，再退出。
+  #
+  # 原来用的是默认的 immediate —— 容器滚动更新时，一个正在交卷的请求会被直接掐断，
+  # 学生看到的是「提交失败」，而服务端其实连 SQL 都没跑完。
+  # 考试系统里「交卷」是唯一不可重来的操作，这个窗口必须留出来。
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
 server:
   port: 8081
+  shutdown: graceful
 
 mybatis-plus:
   configuration:

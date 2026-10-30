@@ -24,6 +24,11 @@ import java.util.List;
  *
  * <p>收卷仍然是走 {@code markSubmitted} 那条带 {@code status='ongoing'} 条件的 UPDATE：
  * 学生正好在这一刻自己点了交卷，那么两个操作只有一个能生效，不会重复判分。
+ *
+ * <p>多实例部署时外面还套了一层 {@link JobLock}：不是为了让上面的幂等"更安全"，
+ * 而是为了避免两个实例捞到同一批行、把同一份卷子往 MQ 里发两遍。
+ * Redis 不可用时 {@code runIfLocked} 会退回无锁执行 —— 幂等性兜得住，
+ * 不能因为锁不可用就不收卷。
  */
 @Component
 public class AutoSubmitJob {
@@ -35,22 +40,35 @@ public class AutoSubmitJob {
     private final GradingService gradingService;
     private final Clock clock;
     private final int batchSize;
+    private final JobLock jobLock;
 
     public AutoSubmitJob(ExamRecordMapper recordMapper,
                          GradingProducer gradingProducer,
                          GradingService gradingService,
                          Clock clock,
-                         @Value("${exam.auto-submit.batch-size}") int batchSize) {
+                         @Value("${exam.auto-submit.batch-size}") int batchSize,
+                         JobLock jobLock) {
         this.recordMapper = recordMapper;
         this.gradingProducer = gradingProducer;
         this.gradingService = gradingService;
         this.clock = clock;
         this.batchSize = batchSize;
+        this.jobLock = jobLock;
     }
 
     /** fixedDelayString 里的纯数字按毫秒解析 */
     @Scheduled(fixedDelayString = "${exam.auto-submit.fixed-delay-ms}")
     public void run() {
+        // 锁 TTL 给 5 分钟：这一轮最多处理 batchSize(200) 份，
+        // 每份一次 UPDATE + 一次 MQ 发送，正常是秒级。留足余量，
+        // 免得锁在任务跑完前过期、另一个实例同时进来。
+        jobLock.runIfLocked("auto-submit", 300, () -> {
+            sweep();
+            return null;
+        });
+    }
+
+    private void sweep() {
         LocalDateTime now = LocalDateTime.now(clock);
         List<ExamRecord> expired = recordMapper.findExpiredOngoing(now, batchSize);
         if (expired.isEmpty()) {

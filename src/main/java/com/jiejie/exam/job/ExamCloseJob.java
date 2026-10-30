@@ -18,6 +18,9 @@ import java.util.List;
  * <p>关考和收卷是两件事，所以拆成两个任务：
  * 先由 AutoSubmitJob 把还在答题的人收掉，再由这里把考试状态关掉。
  * 顺序反了会导致学生正好卡在结束时刻进不了场，也交不了卷。
+ *
+ * <p>这里没有 {@code WHERE status='published'} 的条件 UPDATE，多实例同时跑会重复 UPDATE
+ * 同一行（结果一样，只是多打一遍日志）。所以外面套 {@link JobLock}。
  */
 @Component
 public class ExamCloseJob {
@@ -26,14 +29,25 @@ public class ExamCloseJob {
 
     private final ExamMapper examMapper;
     private final Clock clock;
+    private final JobLock jobLock;
 
-    public ExamCloseJob(ExamMapper examMapper, Clock clock) {
+    public ExamCloseJob(ExamMapper examMapper, Clock clock, JobLock jobLock) {
         this.examMapper = examMapper;
         this.clock = clock;
+        this.jobLock = jobLock;
     }
 
     @Scheduled(fixedDelay = 60_000)
     public void run() {
+        // TTL 60 秒与调度间隔相同：正常一轮是毫秒级，锁早就释放了；
+        // 真卡住超过一分钟，让下一轮照常进来，不要一路堵死。
+        jobLock.runIfLocked("exam-close", 60, () -> {
+            sweep();
+            return null;
+        });
+    }
+
+    private void sweep() {
         List<Exam> ended = examMapper.findPublishedEndedBefore(LocalDateTime.now(clock));
         if (ended.isEmpty()) {
             return;

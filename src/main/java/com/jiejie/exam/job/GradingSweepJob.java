@@ -21,6 +21,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>换句话说：<b>这个任务负责让问题可见，不负责解决问题。</b>
  * 可见之后怎么做（人工重投 / 加告警 / 补死信队列）是下一步的选择。
+ *
+ * <p>这里也套了 {@link JobLock}：它只读不写，多实例跑不会弄坏数据，
+ * 但会把同一个指标用同样的值重复写两遍。加锁的收益是"一个实例负责报数"，
+ * 代价只是多一次 Redis 往返 —— 对一个每 30 秒跑一次的计数任务来说很划算。
  */
 @Component
 public class GradingSweepJob {
@@ -29,14 +33,24 @@ public class GradingSweepJob {
 
     private final ExamRecordMapper recordMapper;
     private final GradingMetrics metrics;
+    private final JobLock jobLock;
 
-    public GradingSweepJob(ExamRecordMapper recordMapper, GradingMetrics metrics) {
+    public GradingSweepJob(ExamRecordMapper recordMapper, GradingMetrics metrics, JobLock jobLock) {
         this.recordMapper = recordMapper;
         this.metrics = metrics;
+        this.jobLock = jobLock;
     }
 
     @Scheduled(fixedDelayString = "${exam.grading.sweep-delay-ms}")
     public void run() {
+        // TTL 30 秒：这个任务只有一次 count 查询，正常是毫秒级
+        jobLock.runIfLocked("grading-sweep", 30, () -> {
+            sweep();
+            return null;
+        });
+    }
+
+    private void sweep() {
         try {
             long unscored = recordMapper.countUnscored();
             metrics.refreshUnscored(unscored);

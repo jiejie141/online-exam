@@ -37,6 +37,15 @@ class ExamCloseJobTest {
     @Mock
     private ExamMapper examMapper;
 
+    /**
+     * 用真的 JobLock + 一个"永远抢得到锁"的假 Redis。
+     *
+     * <p>为什么不 mock JobLock 本身：mock 掉 runIfLocked 等于把被测的接线也 mock 了 ——
+     * 那样即使任务忘了套锁，测试也照样绿。这里让真实的 JobLock 跑一遍
+     * setIfAbsent/execute，只是把 Redis 换成内存里的假实现。
+     */
+    private JobLock jobLock;
+
     private ExamCloseJob job;
 
     private Exam exam(long id, String title) {
@@ -49,7 +58,11 @@ class ExamCloseJobTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        job = new ExamCloseJob(examMapper, FIXED);
+        // 注意：这里只留一个 @BeforeEach。JUnit 5 **不保证**同一个类里
+        // 多个 @BeforeEach 的执行顺序 —— 拆成两个时，构造 job 的那个可能先跑，
+        // 于是拿到一个还没初始化的 jobLock，报 NPE（这个坑我刚踩过）。
+        jobLock = JobLockTestSupport.lockThatAlwaysAcquires();
+        job = new ExamCloseJob(examMapper, FIXED, jobLock);
     }
 
     @Test

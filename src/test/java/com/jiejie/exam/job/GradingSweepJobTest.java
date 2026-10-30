@@ -2,9 +2,9 @@ package com.jiejie.exam.job;
 
 import com.jiejie.exam.domain.mapper.ExamRecordMapper;
 import com.jiejie.exam.grading.GradingMetrics;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -26,8 +26,13 @@ class GradingSweepJobTest {
     @Mock
     private GradingMetrics metrics;
 
-    @InjectMocks
     private GradingSweepJob job;
+
+    @BeforeEach
+    void setUp() {
+        // 真的 JobLock + 假 Redis：mock 掉锁等于把"任务有没有套锁"这件事也一起 mock 了
+        job = new GradingSweepJob(recordMapper, metrics, JobLockTestSupport.lockThatAlwaysAcquires());
+    }
 
     @Test
     void 把漏判数量刷新进指标() {
